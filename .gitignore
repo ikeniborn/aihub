@@ -3,6 +3,7 @@ docs/sphinx/_build/.doctrees/
 
 # Claude Code Agent Workspace
 .claude/workspace/
+.claude/sessions/
 
 # AI Models — large binary files, never commit
 models/
@@ -18,10 +19,12 @@ models/
 # HuggingFace Hub local cache
 .cache/huggingface/
 
-# Credentials and secrets
+# Credentials and secrets — NEVER commit these files
 .env
 .env.local
 .env.*.local
+credentials.yaml
+credentials.*.yaml
 
 # Python
 __pycache__/

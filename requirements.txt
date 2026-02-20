@@ -7,3 +7,7 @@ tqdm>=4.66
 # Optional: Rust-based fast download (recommended)
 # Set HF_HUB_ENABLE_HF_TRANSFER=1 in .env to activate
 hf_transfer>=0.1.4
+
+# S3 / object storage support (AWS S3, MinIO, Yandex, Cloudflare R2, etc.)
+# Required only when using --upload-s3 or --s3-only flags
+boto3>=1.26.0

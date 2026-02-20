@@ -28,9 +28,13 @@ import sys
 import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional, Union
 
 import yaml
+
+# Shared utilities
+sys.path.insert(0, str(Path(__file__).parent))
+from utils import fmt_size  # noqa: E402
 
 
 # ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -369,17 +373,6 @@ loadModels();
 # ─── Config Loading ────────────────────────────────────────────────────────────
 
 
-def _fmt_size(n: int) -> str:
-    """Format byte count to human-readable string. Reused from download_models.py pattern."""
-    if n == 0:
-        return "-"
-    for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}"
-        n /= 1024
-    return f"{n:.1f} TB"
-
-
 def load_yaml(config_path: Path) -> dict:
     """Load and parse YAML file, return raw dict."""
     with config_path.open("r", encoding="utf-8") as f:
@@ -427,7 +420,7 @@ def get_models_json(config_path: Path) -> list[dict]:
             "description": str(item.get("description", "") or ""),
             "downloaded": downloaded,
             "disk_size_bytes": disk_size_bytes,
-            "disk_size_str": _fmt_size(disk_size_bytes) if downloaded else "-",
+            "disk_size_str": fmt_size(disk_size_bytes) if downloaded else "-",
         })
 
     return result
@@ -483,7 +476,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
         """Suppress default access log; print minimal info."""
         print(f"  {self.address_string()} {format % args}")
 
-    def _send_json(self, data, status: int = 200) -> None:
+    def _send_json(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -518,13 +511,21 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             body = self.rfile.read(length)
             try:
                 payload = json.loads(body)
+            except json.JSONDecodeError as e:
+                self._send_json({"error": f"Invalid JSON: {e}"}, status=400)
+                return
+            try:
                 updates = payload.get("updates", [])
                 if not isinstance(updates, list):
                     raise ValueError("'updates' must be a list")
                 save_models(self.config_path, updates)
                 self._send_json({"status": "ok", "updated": len(updates)})
-            except Exception as e:
+            except (ValueError, TypeError) as e:
+                # Ошибки валидации входных данных → 400 Bad Request
                 self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                # Ошибки файловой системы, YAML и прочие → 500 Internal Server Error
+                self._send_json({"error": str(e)}, status=500)
         else:
             self._send_json({"error": "Not found"}, status=404)
 
@@ -532,7 +533,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
 # ─── Server Factory ────────────────────────────────────────────────────────────
 
 
-def make_handler(config_path: Path):
+def make_handler(config_path: Path) -> type[ModelBrowserHandler]:
     """Create a handler class with config_path bound."""
 
     class Handler(ModelBrowserHandler):
@@ -560,9 +561,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--host",
-        default="0.0.0.0",
+        default="127.0.0.1",
         metavar="HOST",
-        help="Адрес для привязки (по умолчанию: 0.0.0.0)",
+        help="Адрес для привязки (по умолчанию: 127.0.0.1; используйте 0.0.0.0 для сетевого доступа)",
     )
     p.add_argument(
         "--config",

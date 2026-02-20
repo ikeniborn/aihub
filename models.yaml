@@ -19,10 +19,27 @@ settings:
   models_dir: ./models
   default_quant: Q4_K_M
   # update_policy options:
-  #   skip   — never re-download if file exists (fastest, ignores upstream changes)
+  #   skip   — never re-download/re-upload if file exists (fastest, ignores upstream changes)
   #   etag   — re-download only if server ETag differs (recommended)
   #   always — always re-download (use with --force flag instead)
   update_policy: etag
+
+  # Повторы при ошибках и rate-limit
+  retry_count: 3           # количество повторных попыток (0 = без повторов)
+  retry_delay: 5.0         # базовая задержка в секундах (экспоненциальный backoff: 5, 10, 20...)
+                           # при HTTP 429 задержка автоматически x10 (т.е. 50s при default)
+  inter_download_delay: 60  # пауза между скачиванием разных моделей (секунды, 0 = без паузы)
+
+  # S3 / object storage settings
+  # Credentials (access_key_id, secret_access_key, bucket, endpoint_url)
+  # must be set in credentials.yaml — NOT here.
+  s3:
+    # Set to true to upload every model to S3 automatically after download
+    # Can also be triggered per-run with --upload-s3 CLI flag
+    sync_after_download: false
+
+    # S3 key prefix (overrides credentials.yaml prefix if set here)
+    # prefix: "models"
 
 models:
 
