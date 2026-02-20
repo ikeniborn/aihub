@@ -229,7 +229,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   /* ── HF Search panel ── */
   .hf-panel { padding: 20px 24px; }
   .hf-search-form {
-    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start;
     background: var(--bg-surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 16px; margin-bottom: 14px;
   }
@@ -243,6 +243,51 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .hf-field input:focus { border-color: var(--accent); }
   .hf-field input[type=text]   { width: 200px; }
   .hf-field input[type=number] { width: 80px; }
+
+  /* ── Regex field with validator ── */
+  .hf-field-regex { flex: 1; min-width: 260px; }
+  .hf-field-regex input { width: 100%; font-family: 'SF Mono', Consolas, monospace; font-size: 0.82rem; }
+  .regex-valid   { border-color: var(--green) !important; }
+  .regex-invalid { border-color: var(--red)   !important; }
+  .regex-error {
+    font-size: 0.7rem; color: var(--red); margin-top: 3px; line-height: 1.3;
+  }
+  .regex-presets {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px;
+  }
+  .regex-chip {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 7px; font-size: 0.68rem; color: var(--text-secondary);
+    cursor: pointer; transition: border-color 0.13s, color 0.13s; white-space: nowrap;
+    font-family: 'SF Mono', Consolas, monospace; user-select: none;
+  }
+  .regex-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .regex-chip.chip-clear {
+    font-family: inherit; color: var(--text-muted); border-style: dashed;
+  }
+  .regex-chip.chip-clear:hover { border-color: var(--red); color: var(--red); }
+
+  /* ── Search filter chips (language / pipeline_tag) ── */
+  .filter-chips {
+    display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px;
+  }
+  .filter-chip {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 8px; font-size: 0.7rem; color: var(--text-secondary);
+    cursor: pointer; transition: all 0.13s; user-select: none;
+  }
+  .filter-chip:hover  { border-color: var(--accent); color: var(--accent); }
+  .filter-chip.active { border-color: var(--accent); color: var(--accent);
+                        background: #2d1f6e; }
+  .hf-field select {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-primary); padding: 7px 10px; font-size: 0.82rem;
+    outline: none; cursor: pointer; transition: border-color 0.15s;
+    width: 200px; appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238898aa' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
+  }
+  .hf-field select:focus { border-color: var(--accent); }
 
   #hf-search-status {
     min-height: 22px; font-size: 0.85rem; margin-bottom: 10px;
@@ -401,9 +446,52 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <label>Автор</label>
         <input type="text" id="hf-author" placeholder="bartowski, unsloth..." onkeydown="if(event.key==='Enter')hfSearch()">
       </div>
+      <div class="hf-field hf-field-regex">
+        <label>Regex файлов <span id="hf-regex-hint" style="font-size:0.65rem;color:var(--text-muted);margin-left:4px"></span></label>
+        <input type="text" id="hf-file-regex" placeholder="Q4_K_M\.gguf$"
+               oninput="onRegexInput()" onkeydown="if(event.key==='Enter')hfSearch()">
+        <div id="hf-regex-error" class="regex-error" style="display:none"></div>
+        <div class="regex-presets">
+          <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$')"        title="Квантизация Q4_K_M">Q4_K_M</span>
+          <span class="regex-chip" onclick="setRegexPreset('Q8_0\\.gguf$')"          title="Квантизация Q8_0">Q8_0</span>
+          <span class="regex-chip" onclick="setRegexPreset('Q5_K_M\\.gguf$')"        title="Квантизация Q5_K_M">Q5_K_M</span>
+          <span class="regex-chip" onclick="setRegexPreset('Q6_K\\.gguf$')"          title="Квантизация Q6_K">Q6_K</span>
+          <span class="regex-chip" onclick="setRegexPreset('IQ4_XS\\.gguf$')"        title="iMatrix Q4 XS">IQ4_XS</span>
+          <span class="regex-chip" onclick="setRegexPreset('IQ4_NL\\.gguf$')"        title="iMatrix Q4 NL">IQ4_NL</span>
+          <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$|Q8_0\\.gguf$')"  title="Q4_K_M или Q8_0">Q4|Q8</span>
+          <span class="regex-chip" onclick="setRegexPreset('\\.gguf$')"              title="Все GGUF файлы">.gguf</span>
+          <span class="regex-chip" onclick="setRegexPreset('\\.safetensors$')"       title="Safetensors файлы">.safetensors</span>
+          <span class="regex-chip chip-clear" onclick="setRegexPreset('')"           title="Очистить поле">✕ сбросить</span>
+        </div>
+      </div>
       <div class="hf-field">
-        <label>Regex файлов</label>
-        <input type="text" id="hf-file-regex" placeholder="Q4_K_M\.gguf$" onkeydown="if(event.key==='Enter')hfSearch()">
+        <label>Тип задачи</label>
+        <select id="hf-pipeline-tag">
+          <option value="">— любой —</option>
+          <option value="text-generation">Текстовая генерация (LLM)</option>
+          <option value="text-to-image">Генерация изображений</option>
+          <option value="image-to-text">Описание изображений</option>
+          <option value="automatic-speech-recognition">Распознавание речи (ASR)</option>
+          <option value="text-to-speech">Синтез речи (TTS)</option>
+          <option value="feature-extraction">Эмбеддинги</option>
+          <option value="sentence-similarity">Семантическое сходство</option>
+          <option value="translation">Перевод</option>
+          <option value="text-classification">Классификация текста</option>
+          <option value="zero-shot-classification">Zero-shot классификация</option>
+        </select>
+      </div>
+      <div class="hf-field">
+        <label>Язык <span style="font-size:0.65rem;color:var(--text-muted)">(ISO 639-1)</span></label>
+        <input type="text" id="hf-language" placeholder="ru, en, zh..." maxlength="20"
+               onkeydown="if(event.key==='Enter')hfSearch()" style="width:120px">
+        <div class="filter-chips" id="lang-chips">
+          <span class="filter-chip" onclick="toggleLangChip(this,'ru')">🇷🇺 ru</span>
+          <span class="filter-chip" onclick="toggleLangChip(this,'en')">🇬🇧 en</span>
+          <span class="filter-chip" onclick="toggleLangChip(this,'zh')">🇨🇳 zh</span>
+          <span class="filter-chip" onclick="toggleLangChip(this,'ja')">🇯🇵 ja</span>
+          <span class="filter-chip" onclick="toggleLangChip(this,'de')">🇩🇪 de</span>
+          <span class="filter-chip" onclick="toggleLangChip(this,'fr')">🇫🇷 fr</span>
+        </div>
       </div>
       <div class="hf-field">
         <label>Лимит</label>
@@ -667,6 +755,66 @@ async function saveChanges() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Regex validator helpers
+// ═══════════════════════════════════════════════════════════════════
+
+function onRegexInput() {
+  const input  = document.getElementById('hf-file-regex');
+  const errEl  = document.getElementById('hf-regex-error');
+  const hint   = document.getElementById('hf-regex-hint');
+  const val    = input.value.trim();
+  if (!val) {
+    input.classList.remove('regex-valid', 'regex-invalid');
+    errEl.style.display = 'none';
+    hint.textContent = '';
+    return true;
+  }
+  try {
+    const re = new RegExp(val, 'i');
+    input.classList.add('regex-valid');
+    input.classList.remove('regex-invalid');
+    errEl.style.display = 'none';
+    // Count how many sample names match the regex for quick feedback
+    const samples = [
+      'model-Q4_K_M.gguf','model-Q8_0.gguf','model-Q5_K_M.gguf','model-Q6_K.gguf',
+      'model-IQ4_XS.gguf','model-IQ4_NL.gguf','model-F16.gguf',
+      'model.safetensors','model.bin','model-Q4_0.gguf',
+    ];
+    const matches = samples.filter(s => re.test(s));
+    hint.textContent = matches.length ? `✓ совпадает: ${matches.join(', ')}` : '✓ нет совпадений с примерами';
+    hint.style.color = matches.length ? 'var(--green)' : 'var(--text-muted)';
+    return true;
+  } catch(e) {
+    input.classList.add('regex-invalid');
+    input.classList.remove('regex-valid');
+    errEl.textContent = '✗ ' + e.message;
+    errEl.style.display = '';
+    hint.textContent = '';
+    return false;
+  }
+}
+
+function setRegexPreset(pattern) {
+  const input = document.getElementById('hf-file-regex');
+  input.value = pattern;
+  onRegexInput();
+  input.focus();
+}
+
+function toggleLangChip(chip, code) {
+  const input = document.getElementById('hf-language');
+  const active = chip.classList.contains('active');
+  // Deactivate all chips
+  document.querySelectorAll('#lang-chips .filter-chip').forEach(c => c.classList.remove('active'));
+  if (active) {
+    input.value = '';
+  } else {
+    chip.classList.add('active');
+    input.value = code;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Tab: Поиск HuggingFace
 // ═══════════════════════════════════════════════════════════════════
 
@@ -674,13 +822,21 @@ let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags}
 
 async function hfSearch() {
-  const q         = document.getElementById('hf-query').value.trim();
-  const author    = document.getElementById('hf-author').value.trim();
-  const fileRegex = document.getElementById('hf-file-regex').value.trim();
-  const limit     = Math.min(50, Math.max(1, parseInt(document.getElementById('hf-limit').value) || 20));
+  const q           = document.getElementById('hf-query').value.trim();
+  const author      = document.getElementById('hf-author').value.trim();
+  const fileRegex   = document.getElementById('hf-file-regex').value.trim();
+  const pipelineTag = document.getElementById('hf-pipeline-tag').value;
+  const language    = document.getElementById('hf-language').value.trim();
+  const limit       = Math.min(50, Math.max(1, parseInt(document.getElementById('hf-limit').value) || 20));
 
-  if (!q && !author && !fileRegex) {
+  if (!q && !author && !fileRegex && !pipelineTag && !language) {
     setHfStatus('Укажите хотя бы один параметр поиска', true);
+    return;
+  }
+
+  // Validate regex before sending to server
+  if (fileRegex && !onRegexInput()) {
+    setHfStatus('Исправьте regex перед поиском', true);
     return;
   }
 
@@ -695,6 +851,8 @@ async function hfSearch() {
   if (q) params.set('q', q);
   if (author) params.set('author', author);
   if (fileRegex) params.set('file_regex', fileRegex);
+  if (pipelineTag) params.set('pipeline_tag', pipelineTag);
+  if (language) params.set('language', language);
   params.set('limit', limit);
 
   setHfStatus('<span class="spinner"></span>&nbsp;Поиск на HuggingFace...', false);
@@ -1110,6 +1268,8 @@ def search_hf(
     file_regex: Optional[str],
     limit: int,
     token: Optional[str],
+    pipeline_tag: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> list[dict]:
     """
     Поиск моделей на HuggingFace Hub.
@@ -1121,6 +1281,14 @@ def search_hf(
     from huggingface_hub import HfApi
 
     limit = min(50, max(1, limit))
+
+    compiled_re: Optional[re.Pattern] = None
+    if file_regex:
+        try:
+            compiled_re = re.compile(file_regex, re.IGNORECASE)
+        except re.error as exc:
+            raise ValueError(f"Невалидный regex: {exc}") from exc
+
     api = HfApi(token=token)
 
     # Запрашиваем с запасом если есть regex (он отсеет часть)
@@ -1129,18 +1297,18 @@ def search_hf(
     kwargs: dict[str, Any] = {
         "limit": fetch_limit,
         "sort": "downloads",
-        "direction": -1,
+        "expand": ["siblings"],   # нужно для фильтрации файлов без доп. запросов
     }
     if query:
         kwargs["search"] = query
     if author:
         kwargs["author"] = author
+    if pipeline_tag:
+        kwargs["pipeline_tag"] = pipeline_tag
+    if language:
+        kwargs["filter"] = language  # язык передаётся как тег-фильтр (ISO 639-1 код)
 
     models = list(api.list_models(**kwargs))
-
-    compiled_re: Optional[re.Pattern] = None
-    if file_regex:
-        compiled_re = re.compile(file_regex, re.IGNORECASE)
 
     results = []
     for m in models:
@@ -1315,17 +1483,24 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/search":
             qs = parse_qs(parsed.query)
-            query      = qs.get("q", [None])[0] or None
-            author     = qs.get("author", [None])[0] or None
-            file_regex = qs.get("file_regex", [None])[0] or None
+            query        = qs.get("q", [None])[0] or None
+            author       = qs.get("author", [None])[0] or None
+            file_regex   = qs.get("file_regex", [None])[0] or None
+            pipeline_tag = qs.get("pipeline_tag", [None])[0] or None
+            language     = qs.get("language", [None])[0] or None
             try:
                 limit = int(qs.get("limit", ["20"])[0])
             except (ValueError, TypeError):
                 limit = 20
 
             try:
-                results = search_hf(query, author, file_regex, limit, self.hf_token)
+                results = search_hf(
+                    query, author, file_regex, limit, self.hf_token,
+                    pipeline_tag=pipeline_tag, language=language,
+                )
                 self._send_json({"results": results, "count": len(results)})
+            except ValueError as e:
+                self._send_json({"error": str(e), "results": []}, status=400)
             except Exception as e:
                 self._send_json({"error": str(e), "results": []}, status=500)
 
