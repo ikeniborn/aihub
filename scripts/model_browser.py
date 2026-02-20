@@ -225,6 +225,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .enabled-cb { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
   #empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; }
+  .btn-delete {
+    background: none; border: 1px solid #7f1d1d; border-radius: 4px;
+    color: #fca5a5; padding: 2px 8px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-delete:hover { opacity: 1; background: #450a0a; }
+  td.td-actions { width: 60px; text-align: center; }
 
   /* ── HF Search panel ── */
   .hf-panel { padding: 20px 24px; }
@@ -363,6 +370,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .hf-add-fields { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
   .hf-add-field { display: flex; flex-direction: column; gap: 4px; }
   .hf-add-field label { font-size: 0.75rem; color: var(--text-muted); }
+  .field-hint { font-weight: normal; font-size: 0.68rem; opacity: 0.6; }
   .hf-add-field input[type=text],
   .hf-add-field input[type=number] {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
@@ -475,6 +483,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <th>VRAM</th>
           <th>Размер</th>
           <th>Описание</th>
+          <th></th>
         </tr>
       </thead>
       <tbody id="models-body"></tbody>
@@ -592,11 +601,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <h3 id="hf-add-title">Добавить выбранные модели</h3>
         <div class="hf-add-fields">
           <div class="hf-add-field">
-            <label>dest_dir</label>
+            <label title="Подпапка внутри models_dir, куда сохранится файл">Папка (dest_dir)</label>
             <input type="text" id="add-dest-dir" placeholder="misc" value="misc">
           </div>
           <div class="hf-add-field">
-            <label>Теги (через пробел)</label>
+            <label>Теги <span class="field-hint">(очистите для индивидуальных)</span></label>
             <input type="text" id="add-tags" placeholder="llm chat 8b">
           </div>
           <div class="hf-add-field">
@@ -604,8 +613,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <input type="number" id="add-vram" placeholder="0" min="0" step="1" value="0">
           </div>
           <div class="hf-add-field wide">
-            <label>Описание</label>
-            <input type="text" id="add-description" placeholder="авто (из результатов поиска)">
+            <label>Описание <span class="field-hint">(очистите для индивидуальных)</span></label>
+            <input type="text" id="add-description" placeholder="авто из поиска">
           </div>
         </div>
         <div class="hf-add-actions">
@@ -767,9 +776,39 @@ function renderModels(models) {
     tdDesc.className = 'desc';
     tdDesc.textContent = m.description || '';
 
-    tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc);
+    const tdActions = document.createElement('td');
+    tdActions.className = 'td-actions';
+    const btnDel = document.createElement('button');
+    btnDel.className = 'btn-delete';
+    btnDel.textContent = '✕';
+    btnDel.title = m.downloaded
+      ? 'Удалить файл и убрать из models.yaml'
+      : 'Убрать из models.yaml';
+    btnDel.onclick = () => deleteModel(m);
+    tdActions.appendChild(btnDel);
+
+    tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc, tdActions);
     tbody.appendChild(tr);
   });
+}
+
+async function deleteModel(m) {
+  const hasFile = m.downloaded;
+  const msg = hasFile
+    ? `Удалить файл «${m.filename}» с диска и убрать запись из models.yaml?`
+    : `Убрать «${m.filename}» из models.yaml?\n(Файл не найден на диске)`;
+  if (!confirm(msg)) return;
+  try {
+    const resp = await fetch('/api/delete', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'HTTP ' + resp.status);
+    loadModels();
+  } catch (e) {
+    alert('Ошибка удаления: ' + e.message);
+  }
 }
 
 async function loadModels() {
@@ -875,7 +914,8 @@ function toggleLangChip(chip) {
 // ═══════════════════════════════════════════════════════════════════
 
 let hfResults = [];
-let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags}
+let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
+let hfAddFormAutoValues = {}; // auto-filled form values for per-model fallback detection
 
 async function hfSearch() {
   const q           = document.getElementById('hf-query').value.trim();
@@ -1027,7 +1067,7 @@ function renderHfResults(results) {
 function hfSelectionChange(cb, r, fname) {
   const key = r.repo_id + '||' + (fname || '');
   if (cb.checked) {
-    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [], description: r.description || '' });
+    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [], description: r.description || '', pipeline_tag: r.pipeline_tag || '' });
   } else {
     hfSelected.delete(key);
   }
@@ -1047,7 +1087,7 @@ function hfToggleAll(masterCb) {
     const r = hfResults.find(x => x.repo_id === repo_id);
     if (!r) return;
     if (masterCb.checked) {
-      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [], description: r.description || '' });
+      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [], description: r.description || '', pipeline_tag: r.pipeline_tag || '' });
     } else {
       hfSelected.delete(key);
     }
@@ -1082,6 +1122,63 @@ function hfApplySizeFilter() {
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
 }
 
+// ── helpers for add form pre-fill ─────────────────────────────────────────────
+
+function estimateVram(fname, repoId) {
+  // Estimate VRAM (GB) from filename + model size string
+  const hay = ((fname || '') + '-' + (repoId || '')).toUpperCase();
+  const sizeM = hay.match(/[-_](\d+(?:\.\d+)?)[B](?:[-_A-Z]|$)/);
+  if (!sizeM) return 0;
+  const pb = parseFloat(sizeM[1]);
+  const quantMap = [
+    ['Q2_K', 3.0], ['Q3_K_S', 3.5], ['Q3_K_M', 3.5], ['Q3_K_L', 4.0],
+    ['Q4_0', 4.0], ['IQ4_XS', 4.0], ['Q4_K_S', 4.0], ['Q4_K_M', 4.5], ['Q4_K', 4.5],
+    ['Q5_0', 5.0], ['Q5_K_S', 5.0], ['Q5_K_M', 5.5], ['Q5_K', 5.5],
+    ['Q6_K', 6.5], ['Q8_0', 8.0], ['F16', 16.0], ['BF16', 16.0],
+  ];
+  let bpw = 4.5;
+  for (const [q, b] of quantMap) { if (hay.includes(q)) { bpw = b; break; } }
+  return Math.max(1, Math.round(pb * bpw / 8 + 0.5));
+}
+
+function suggestDestDir(repoId, pipelineTag, tags) {
+  // Auto-suggest dest_dir from model type, name, language
+  const lower = (repoId || '').toLowerCase();
+  const t = (tags || []).map(s => s.toLowerCase());
+  const pipe = (pipelineTag || '').toLowerCase();
+
+  // Embeddings
+  if (pipe === 'sentence-similarity' || pipe === 'feature-extraction' ||
+      t.includes('embeddings') || lower.includes('embed'))
+    return 'embeddings';
+
+  // Image generation
+  if (pipe === 'text-to-image' || pipe === 'image-to-image' || t.includes('image_gen')) {
+    if (lower.includes('flux'))   return 'image_gen/flux';
+    if (lower.includes('sdxl') || lower.includes('stable-diffusion')) return 'image_gen/sdxl';
+    return 'image_gen';
+  }
+
+  // LLM variants
+  if (pipe === 'text-generation' || pipe === 'text2text-generation' || t.includes('llm')) {
+    if (t.includes('russian') || lower.includes('saiga') || lower.includes('t-lite') ||
+        lower.includes('gigachat') || lower.includes('ru-'))
+      return 'llm/russian';
+    if (t.includes('code') || lower.includes('coder') || lower.includes('code'))
+      return 'llm/code';
+    // Model family
+    if (lower.includes('llama'))      return 'llm/llama';
+    if (lower.includes('qwen'))       return 'llm/qwen';
+    if (lower.includes('deepseek'))   return 'llm/deepseek';
+    if (lower.includes('phi'))        return 'llm/phi';
+    if (lower.includes('mistral') || lower.includes('mixtral')) return 'llm/mistral';
+    if (lower.includes('gemma'))      return 'llm/gemma';
+    if (lower.includes('falcon'))     return 'llm/falcon';
+    return 'llm';
+  }
+  return 'misc';
+}
+
 function hfShowAddForm() {
   const n = hfSelected.size;
   const word = n === 1 ? 'модель' : n < 5 ? 'модели' : 'моделей';
@@ -1089,8 +1186,22 @@ function hfShowAddForm() {
   document.getElementById('hf-add-form').style.display = 'block';
   document.getElementById('add-status').className = 'status-msg';
   document.getElementById('add-status').style.display = 'none';
-  // Clear description — each model will use its own auto-generated description
-  document.getElementById('add-description').value = '';
+
+  // Pre-fill form fields from first selected item; store auto values for per-model detection
+  const first = hfSelected.values().next().value;
+  hfAddFormAutoValues = {};
+  if (first) {
+    const r = hfResults.find(x => x.repo_id === first.repo_id);
+    const autoDir  = suggestDestDir(first.repo_id, first.pipeline_tag, first.tags || []);
+    const autoTags = (first.tags || []).join(' ');
+    const autoVram = estimateVram(first.filename, first.repo_id);
+    const autoDesc = first.description || '';
+    hfAddFormAutoValues = { dir: autoDir, tags: autoTags, vram: autoVram, desc: autoDesc };
+    document.getElementById('add-dest-dir').value    = autoDir;
+    document.getElementById('add-tags').value        = autoTags;
+    document.getElementById('add-vram').value        = autoVram;
+    document.getElementById('add-description').value = autoDesc;
+  }
   document.getElementById('hf-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1099,12 +1210,17 @@ function hfCancelAdd() {
 }
 
 async function hfConfirmAdd() {
-  const dest_dir   = document.getElementById('add-dest-dir').value.trim() || 'misc';
-  const tagsRaw    = document.getElementById('add-tags').value.trim();
-  const tags       = tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [];
-  const vram_gb    = parseFloat(document.getElementById('add-vram').value) || 0;
-  const description = document.getElementById('add-description').value.trim();
-  const enabled    = document.getElementById('add-enabled').checked;
+  const dirVal   = document.getElementById('add-dest-dir').value.trim();
+  const tagsRaw  = document.getElementById('add-tags').value.trim();
+  const vramVal  = document.getElementById('add-vram').value.trim();
+  const descVal  = document.getElementById('add-description').value.trim();
+  const enabled  = document.getElementById('add-enabled').checked;
+  // Detect if user changed the auto-filled values (unchanged → compute per-model)
+  const dirAuto  = dirVal  === (hfAddFormAutoValues.dir  || '');
+  const tagsAuto = tagsRaw === (hfAddFormAutoValues.tags || '');
+  const vramAuto = vramVal === String(hfAddFormAutoValues.vram ?? '');
+  const descAuto = descVal === (hfAddFormAutoValues.desc || '');
+  const globalTags = tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [];
 
   const models = [];
   for (const [, item] of hfSelected.entries()) {
@@ -1114,10 +1230,11 @@ async function hfConfirmAdd() {
     }
     models.push({
       repo_id: item.repo_id, filename: item.filename,
-      dest_dir, enabled, gated: item.gated,
-      tags: tags.length > 0 ? tags : item.tags,
-      vram_gb,
-      description: description || item.description || '',
+      enabled, gated: item.gated,
+      dest_dir:    dirAuto  ? suggestDestDir(item.repo_id, item.pipeline_tag, item.tags) : (dirVal || 'misc'),
+      tags:        tagsAuto ? (item.tags || [])    : globalTags,
+      vram_gb:     vramAuto ? estimateVram(item.filename, item.repo_id) : (parseFloat(vramVal) || 0),
+      description: descAuto ? (item.description || '') : descVal,
     });
   }
 
@@ -1611,6 +1728,51 @@ def add_models_to_yaml(
     return {"added": added, "skipped": skipped}
 
 
+def delete_model(
+    config_path: Path,
+    repo_id: str,
+    filename: str,
+) -> dict:
+    """
+    Удаляет модель из models.yaml и, если файл существует на диске, удаляет его.
+
+    Возвращает {"removed_yaml": bool, "removed_file": bool, "file_path": str|None}.
+    """
+    raw = load_yaml(config_path)
+    settings: dict = raw.get("settings", {})
+    models_dir = Path(settings.get("models_dir", "./models"))
+    if not models_dir.is_absolute():
+        models_dir = config_path.parent / models_dir
+
+    models_list = raw.get("models", []) or []
+    new_list = []
+    removed_yaml = False
+    removed_file = False
+    file_path_str: Optional[str] = None
+
+    for item in models_list:
+        if not isinstance(item, dict):
+            new_list.append(item)
+            continue
+        if item.get("repo_id") == repo_id and item.get("filename") == filename:
+            removed_yaml = True
+            dest_dir = item.get("dest_dir", "misc")
+            local_file = models_dir / dest_dir / filename
+            file_path_str = str(local_file)
+            if local_file.is_file():
+                local_file.unlink()
+                removed_file = True
+        else:
+            new_list.append(item)
+
+    if not removed_yaml:
+        raise ValueError(f"Запись не найдена: {repo_id}::{filename}")
+
+    raw["models"] = new_list
+    _atomic_yaml_write(config_path, raw)
+    return {"removed_yaml": removed_yaml, "removed_file": removed_file, "file_path": file_path_str}
+
+
 def _atomic_yaml_write(config_path: Path, data: dict) -> None:
     """Атомарная запись YAML через tempfile + os.replace()."""
     config_dir = config_path.parent
@@ -1814,6 +1976,19 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 if not isinstance(models_list, list):
                     raise ValueError("'models' must be a list")
                 result = add_models_to_yaml(self.config_path, models_list)
+                self._send_json({"status": "ok", **result})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/delete":
+            try:
+                repo_id = str(payload.get("repo_id", "")).strip()
+                filename = str(payload.get("filename", "")).strip()
+                if not repo_id or not filename:
+                    raise ValueError("repo_id и filename обязательны")
+                result = delete_model(self.config_path, repo_id, filename)
                 self._send_json({"status": "ok", **result})
             except (ValueError, TypeError) as e:
                 self._send_json({"error": str(e)}, status=400)
