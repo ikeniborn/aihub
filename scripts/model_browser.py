@@ -263,6 +263,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .model-edit-input.w-desc  { width: 260px; }
   .model-edit-input.w-dir   { width: 150px; }
   .dir-move-note { font-size: 0.68rem; color: var(--yellow); margin-top: 2px; }
+  .dir-error-hint { font-size: 0.68rem; color: #f87171; margin-top: 2px; display: none; }
+  .input-dir-invalid { border-color: #dc2626 !important; background: #1c0a0a !important; }
   .model-edit-actions { display: flex; gap: 8px; align-items: center; padding-bottom: 1px; }
   /* ── Group rows (dest_dir tree) ── */
   .group-row-l1 { background: #111827; cursor: pointer; user-select: none; }
@@ -1017,6 +1019,11 @@ function modelEditToggle(m, mainTr, btn) {
   form.appendChild(_editField('Описание', 'desc', 'text', m.description || '', 'w-desc'));
   // dest_dir
   const dirWrap = _editField('Папка (dest_dir)', 'dir', 'text', m.dest_dir || 'misc', 'w-dir');
+  const dirInp = dirWrap.querySelector('input');
+  const dirErr = document.createElement('div');
+  dirErr.className = 'dir-error-hint';
+  dirInp.insertAdjacentElement('afterend', dirErr);
+  dirInp.addEventListener('input', () => applyDirValidation(dirInp, dirErr));
   if (m.downloaded) {
     const note = document.createElement('div');
     note.className = 'dir-move-note';
@@ -1077,6 +1084,15 @@ async function modelEditSave(m, editTr, mainTr, btn) {
     if (f === 'dir')   update.dest_dir = inp.value.trim() || 'misc';
     if (f === 'gated') update.gated = inp.checked;
   });
+
+  // Validate dest_dir before saving
+  const dirInp = editTr.querySelector('input[data-field="dir"]');
+  const dirErr = dirInp ? dirInp.nextElementSibling : null;
+  if (dirInp && !applyDirValidation(dirInp, dirErr)) {
+    const st = editTr.querySelector('[data-role=edit-status]');
+    if (st) { st.className = 'status-msg error'; st.textContent = 'Исправьте ошибки перед сохранением'; }
+    return;
+  }
 
   const statusEl = editTr.querySelector('[data-role=edit-status]');
   const btnSave = editTr.querySelector('.btn-primary');
@@ -1431,6 +1447,35 @@ function hfApplySizeFilter() {
 
 // ── helpers for add form pre-fill ─────────────────────────────────────────────
 
+// ── dest_dir validation ────────────────────────────────────────────────────────
+
+function validateDestDir(val) {
+  if (!val || !val.trim()) return null; // empty → 'misc' applied at save level
+  const v = val.trim();
+  if (v.includes('\\'))           return 'Используйте / а не \\';
+  if (v.startsWith('/') || v.endsWith('/')) return 'Нельзя начинать/заканчивать на /';
+  if (v.includes('//'))           return 'Двойной // запрещён';
+  if (v.includes('..'))           return 'Путь .. запрещён';
+  if (!/^[a-z0-9_\-\/]+$/.test(v)) return 'Допустимы: a-z 0-9 _ - /';
+  if (v.split('/').length > 3)    return 'Максимум 3 уровня (пример: llm/qwen/chat)';
+  return null;
+}
+
+// Validates input in-place: auto-lowercases, replaces \\ → /, shows/hides hint.
+// Returns true if valid (or empty).
+function applyDirValidation(input, hintEl) {
+  input.value = input.value.replace(/\\/g, '/').replace(/[A-Z]/g, c => c.toLowerCase());
+  const err = validateDestDir(input.value);
+  if (err) {
+    input.classList.add('input-dir-invalid');
+    if (hintEl) { hintEl.textContent = err; hintEl.style.display = ''; }
+  } else {
+    input.classList.remove('input-dir-invalid');
+    if (hintEl) { hintEl.textContent = ''; hintEl.style.display = 'none'; }
+  }
+  return !err;
+}
+
 function estimateVram(fname, repoId) {
   // Estimate VRAM (GB) from filename + model size string
   const hay = ((fname || '') + '-' + (repoId || '')).toUpperCase();
@@ -1517,7 +1562,10 @@ function hfShowAddForm() {
     const tdDir = document.createElement('td');
     const inDir = document.createElement('input');
     inDir.className = 'hf-add-input add-dest-dir'; inDir.value = autoDir; inDir.placeholder = 'misc';
-    tdDir.appendChild(inDir);
+    const inDirErr = document.createElement('div');
+    inDirErr.className = 'dir-error-hint';
+    inDir.addEventListener('input', () => applyDirValidation(inDir, inDirErr));
+    tdDir.append(inDir, inDirErr);
 
     // tags
     const tdTags = document.createElement('td');
@@ -1573,6 +1621,19 @@ async function hfConfirmAdd() {
   }
   if (models.length === 0) {
     setAddStatus('Нет моделей для добавления', true);
+    return;
+  }
+
+  // Validate all dest_dir fields before sending
+  let dirHasErrors = false;
+  for (const tr of document.querySelectorAll('#hf-add-rows tr')) {
+    const inDir = tr.querySelector('.add-dest-dir');
+    if (!inDir) continue;
+    const hintEl = inDir.nextElementSibling;
+    if (!applyDirValidation(inDir, hintEl)) dirHasErrors = true;
+  }
+  if (dirHasErrors) {
+    setAddStatus('Исправьте ошибки в поле «Папка» перед добавлением', true);
     return;
   }
 
