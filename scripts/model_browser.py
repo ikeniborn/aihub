@@ -36,9 +36,10 @@ import tempfile
 import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 from urllib.parse import urlparse, parse_qs
 
 import yaml
@@ -59,8 +60,20 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 
 # ─── Download State ────────────────────────────────────────────────────────────
 
+class DownloadState(TypedDict):
+    running: bool
+    cancelled: bool
+    process: Optional[Any]          # subprocess.Popen or None
+    log: list[str]
+    current: str                    # model name currently being downloaded
+    progress: int                   # 0–100
+    model_count: int
+    done_count: int
+    status_map: dict[str, str]      # model name → "DOWNLOAD"|"SKIP"|"ERROR"
+
+
 _dl_lock: threading.Lock = threading.Lock()
-download_state: dict = {
+download_state: DownloadState = {
     "running": False,
     "cancelled": False,
     "process": None,
@@ -69,7 +82,7 @@ download_state: dict = {
     "progress": 0,
     "model_count": 0,
     "done_count": 0,
-    "status_map": {},   # repo_id/filename → "DOWNLOAD"|"SKIP"|"ERROR"
+    "status_map": {},
 }
 
 
@@ -697,7 +710,7 @@ async function hfSearch() {
       : ` (${data.count})`;
     setHfStatus('Найдено репозиториев: ' + data.count + (data.count !== hfResults.length ? `, строк: ${hfResults.reduce((s,r)=>s+(r.files.length||1),0)}` : ''), false);
   } catch (e) {
-    setHfStatus('Ошибка: ' + e.message, true);
+    setHfStatus('Ошибка: ' + escHtml(e.message), true);
   } finally {
     btn.disabled = false;
   }
@@ -862,7 +875,7 @@ async function hfConfirmAdd() {
     document.getElementById('hf-select-all').indeterminate = false;
     loadModels(); // обновляем список моделей в фоне
   } catch (e) {
-    setAddStatus('Ошибка: ' + e.message, true);
+    setAddStatus('Ошибка: ' + escHtml(e.message), true);
   } finally {
     btn.disabled = false;
   }
@@ -1344,10 +1357,14 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
-        length = int(self.headers.get("Content-Length", 0))
+        path = urlparse(self.path).path
+        try:
+            length = min(int(self.headers.get("Content-Length", 0) or 0), 10 * 1024 * 1024)
+        except (ValueError, TypeError):
+            length = 0
         body = self.rfile.read(length)
 
-        if self.path == "/api/download/cancel":
+        if path == "/api/download/cancel":
             with _dl_lock:
                 download_state["cancelled"] = True
                 proc = download_state.get("process")
@@ -1359,7 +1376,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "cancelled"})
             return
 
-        if self.path == "/api/download/start":
+        if path == "/api/download/start":
             with _dl_lock:
                 if download_state["running"]:
                     self._send_json({"error": "Download already running"}, status=409)
@@ -1396,7 +1413,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             self._send_json({"error": f"Invalid JSON: {e}"}, status=400)
             return
 
-        if self.path == "/api/save":
+        if path == "/api/save":
             try:
                 updates = payload.get("updates", [])
                 if not isinstance(updates, list):
@@ -1408,7 +1425,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
 
-        elif self.path == "/api/add":
+        elif path == "/api/add":
             try:
                 models_list = payload.get("models", [])
                 if not isinstance(models_list, list):
@@ -1499,8 +1516,10 @@ def _download_worker(config_path: Path) -> None:
                         download_state["progress"] = min(pct, 99)
                         break
 
-        proc.wait()
+        rc = proc.wait()
         with _dl_lock:
+            if rc != 0 and not download_state["cancelled"]:
+                download_state["log"].append(f"[WORKER] download_models.py завершился с кодом {rc}")
             download_state["running"] = False
             download_state["progress"] = 100
             download_state["process"] = None
