@@ -366,21 +366,28 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border: 1px solid var(--accent); border-radius: 8px;
     padding: 18px; margin-top: 16px;
   }
-  .hf-add-form h3 { font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 14px; }
-  .hf-add-fields { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
-  .hf-add-field { display: flex; flex-direction: column; gap: 4px; }
-  .hf-add-field label { font-size: 0.75rem; color: var(--text-muted); }
-  .field-hint { font-weight: normal; font-size: 0.68rem; opacity: 0.6; }
-  .hf-add-field input[type=text],
-  .hf-add-field input[type=number] {
-    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
-    color: var(--text-primary); padding: 6px 10px; font-size: 0.85rem;
+  .hf-add-form h3 { font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 12px; }
+  .hf-add-scroll { overflow-x: auto; margin-bottom: 14px; }
+  .hf-add-table { width: 100%; border-collapse: collapse; }
+  .hf-add-table th {
+    font-size: 0.72rem; color: var(--text-muted); text-align: left;
+    padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .hf-add-table td { padding: 5px 6px; border-bottom: 1px solid #1a2030; vertical-align: middle; }
+  .hf-add-table .cell-add-model { min-width: 160px; }
+  .hf-add-table .cell-add-model .add-repo { font-size: 0.78rem; color: #a78bfa; }
+  .hf-add-table .cell-add-model .add-fname { font-size: 0.7rem; color: var(--text-muted); }
+  .col-add-dir  { width: 130px; }
+  .col-add-tags { width: 170px; }
+  .col-add-vram { width: 70px; }
+  .col-add-desc { min-width: 200px; }
+  .hf-add-input {
+    width: 100%; box-sizing: border-box;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-primary); padding: 4px 8px; font-size: 0.78rem;
     outline: none; transition: border-color 0.15s;
   }
-  .hf-add-field input:focus { border-color: var(--accent); }
-  .hf-add-field input[type=text]   { width: 200px; }
-  .hf-add-field input[type=number] { width: 90px; }
-  .hf-add-field.wide input[type=text] { width: 280px; }
+  .hf-add-input:focus { border-color: var(--accent); }
   .hf-add-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
   /* ── Download Panel ── */
@@ -599,23 +606,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
       <div class="hf-add-form" id="hf-add-form">
         <h3 id="hf-add-title">Добавить выбранные модели</h3>
-        <div class="hf-add-fields">
-          <div class="hf-add-field">
-            <label title="Подпапка внутри models_dir, куда сохранится файл">Папка (dest_dir)</label>
-            <input type="text" id="add-dest-dir" placeholder="misc" value="misc">
-          </div>
-          <div class="hf-add-field">
-            <label>Теги <span class="field-hint">(очистите для индивидуальных)</span></label>
-            <input type="text" id="add-tags" placeholder="llm chat 8b">
-          </div>
-          <div class="hf-add-field">
-            <label>VRAM (GB)</label>
-            <input type="number" id="add-vram" placeholder="0" min="0" step="1" value="0">
-          </div>
-          <div class="hf-add-field wide">
-            <label>Описание <span class="field-hint">(очистите для индивидуальных)</span></label>
-            <input type="text" id="add-description" placeholder="авто из поиска">
-          </div>
+        <div class="hf-add-scroll">
+          <table class="hf-add-table">
+            <thead>
+              <tr>
+                <th>Модель / Файл</th>
+                <th class="col-add-dir">Папка (dest_dir)</th>
+                <th class="col-add-tags">Теги</th>
+                <th class="col-add-vram">VRAM GB</th>
+                <th class="col-add-desc">Описание</th>
+              </tr>
+            </thead>
+            <tbody id="hf-add-rows"></tbody>
+          </table>
         </div>
         <div class="hf-add-actions">
           <label class="toggle-label">
@@ -915,7 +918,6 @@ function toggleLangChip(chip) {
 
 let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
-let hfAddFormAutoValues = {}; // auto-filled form values for per-model fallback detection
 
 async function hfSearch() {
   const q           = document.getElementById('hf-query').value.trim();
@@ -1183,25 +1185,59 @@ function hfShowAddForm() {
   const n = hfSelected.size;
   const word = n === 1 ? 'модель' : n < 5 ? 'модели' : 'моделей';
   document.getElementById('hf-add-title').textContent = `Добавить ${n} ${word} в models.yaml`;
-  document.getElementById('hf-add-form').style.display = 'block';
   document.getElementById('add-status').className = 'status-msg';
   document.getElementById('add-status').style.display = 'none';
 
-  // Pre-fill form fields from first selected item; store auto values for per-model detection
-  const first = hfSelected.values().next().value;
-  hfAddFormAutoValues = {};
-  if (first) {
-    const r = hfResults.find(x => x.repo_id === first.repo_id);
-    const autoDir  = suggestDestDir(first.repo_id, first.pipeline_tag, first.tags || []);
-    const autoTags = (first.tags || []).join(' ');
-    const autoVram = estimateVram(first.filename, first.repo_id);
-    const autoDesc = first.description || '';
-    hfAddFormAutoValues = { dir: autoDir, tags: autoTags, vram: autoVram, desc: autoDesc };
-    document.getElementById('add-dest-dir').value    = autoDir;
-    document.getElementById('add-tags').value        = autoTags;
-    document.getElementById('add-vram').value        = autoVram;
-    document.getElementById('add-description').value = autoDesc;
+  // Build per-model editable rows
+  const tbody = document.getElementById('hf-add-rows');
+  tbody.innerHTML = '';
+  for (const [key, item] of hfSelected.entries()) {
+    const autoDir  = suggestDestDir(item.repo_id, item.pipeline_tag, item.tags || []);
+    const autoTags = (item.tags || []).join(' ');
+    const autoVram = estimateVram(item.filename, item.repo_id);
+    const autoDesc = item.description || '';
+
+    const tr = document.createElement('tr');
+    tr.dataset.key = key;
+
+    // Модель / файл (read-only display)
+    const tdM = document.createElement('td');
+    tdM.className = 'cell-add-model';
+    const short = item.repo_id.split('/').pop();
+    tdM.innerHTML =
+      `<div class="add-repo" title="${escHtml(item.repo_id)}">${escHtml(short)}</div>` +
+      `<div class="add-fname">${escHtml(item.filename)}</div>`;
+
+    // dest_dir
+    const tdDir = document.createElement('td');
+    const inDir = document.createElement('input');
+    inDir.className = 'hf-add-input add-dest-dir'; inDir.value = autoDir; inDir.placeholder = 'misc';
+    tdDir.appendChild(inDir);
+
+    // tags
+    const tdTags = document.createElement('td');
+    const inTags = document.createElement('input');
+    inTags.className = 'hf-add-input add-tags'; inTags.value = autoTags; inTags.placeholder = 'llm chat 8b';
+    tdTags.appendChild(inTags);
+
+    // vram
+    const tdVram = document.createElement('td');
+    const inVram = document.createElement('input');
+    inVram.type = 'number'; inVram.className = 'hf-add-input add-vram';
+    inVram.value = autoVram; inVram.min = '0'; inVram.step = '1';
+    tdVram.appendChild(inVram);
+
+    // description
+    const tdDesc = document.createElement('td');
+    const inDesc = document.createElement('input');
+    inDesc.className = 'hf-add-input add-description'; inDesc.value = autoDesc; inDesc.placeholder = 'описание';
+    tdDesc.appendChild(inDesc);
+
+    tr.append(tdM, tdDir, tdTags, tdVram, tdDesc);
+    tbody.appendChild(tr);
   }
+
+  document.getElementById('hf-add-form').style.display = 'block';
   document.getElementById('hf-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1210,32 +1246,29 @@ function hfCancelAdd() {
 }
 
 async function hfConfirmAdd() {
-  const dirVal   = document.getElementById('add-dest-dir').value.trim();
-  const tagsRaw  = document.getElementById('add-tags').value.trim();
-  const vramVal  = document.getElementById('add-vram').value.trim();
-  const descVal  = document.getElementById('add-description').value.trim();
-  const enabled  = document.getElementById('add-enabled').checked;
-  // Detect if user changed the auto-filled values (unchanged → compute per-model)
-  const dirAuto  = dirVal  === (hfAddFormAutoValues.dir  || '');
-  const tagsAuto = tagsRaw === (hfAddFormAutoValues.tags || '');
-  const vramAuto = vramVal === String(hfAddFormAutoValues.vram ?? '');
-  const descAuto = descVal === (hfAddFormAutoValues.desc || '');
-  const globalTags = tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [];
-
+  const enabled = document.getElementById('add-enabled').checked;
   const models = [];
-  for (const [, item] of hfSelected.entries()) {
+  for (const tr of document.querySelectorAll('#hf-add-rows tr')) {
+    const key = tr.dataset.key;
+    const item = hfSelected.get(key);
+    if (!item) continue;
     if (!item.filename) {
       setAddStatus('Ошибка: у некоторых записей нет имени файла — используйте «Regex файлов» при поиске', true);
       return;
     }
+    const tagsRaw = tr.querySelector('.add-tags').value.trim();
     models.push({
       repo_id: item.repo_id, filename: item.filename,
       enabled, gated: item.gated,
-      dest_dir:    dirAuto  ? suggestDestDir(item.repo_id, item.pipeline_tag, item.tags) : (dirVal || 'misc'),
-      tags:        tagsAuto ? (item.tags || [])    : globalTags,
-      vram_gb:     vramAuto ? estimateVram(item.filename, item.repo_id) : (parseFloat(vramVal) || 0),
-      description: descAuto ? (item.description || '') : descVal,
+      dest_dir:    tr.querySelector('.add-dest-dir').value.trim() || 'misc',
+      tags:        tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [],
+      vram_gb:     parseFloat(tr.querySelector('.add-vram').value) || 0,
+      description: tr.querySelector('.add-description').value.trim(),
     });
+  }
+  if (models.length === 0) {
+    setAddStatus('Нет моделей для добавления', true);
+    return;
   }
 
   const btn = document.getElementById('add-confirm-btn');
