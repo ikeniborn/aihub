@@ -433,6 +433,23 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .hf-add-input:focus { border-color: var(--accent); }
   .hf-add-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 
+  /* ── Download Controls (before start) ── */
+  .dl-controls {
+    display: flex; align-items: center; gap: 12px; margin-left: auto; flex-wrap: wrap;
+  }
+  .dl-ctrl-group {
+    display: flex; align-items: center; gap: 5px;
+  }
+  .dl-ctrl-label {
+    font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap; cursor: help;
+  }
+  .dl-ctrl-input {
+    width: 54px; padding: 4px 6px; border-radius: 5px;
+    border: 1px solid var(--border); background: var(--bg-elevated);
+    color: var(--text-primary); font-size: 0.82rem; text-align: center;
+  }
+  .dl-ctrl-input:focus { outline: none; border-color: var(--accent); }
+
   /* ── Download Panel ── */
   .download-panel {
     background: var(--bg-surface); border: 1px solid var(--border);
@@ -504,8 +521,22 @@ HTML_PAGE = r"""<!DOCTYPE html>
     </label>
     <button class="btn-primary" id="save-btn" onclick="saveChanges()" disabled style="margin-left:auto">Сохранить</button>
     <span class="status-msg" id="save-msg"></span>
-    <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" style="margin-left:8px" title="Скачать все enabled модели">Скачать enabled</button>
-    <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none">Отменить</button>
+    <div class="dl-controls" id="dl-controls">
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Максимум параллельных диапазонных запросов к серверу (HF_XET_NUM_CONCURRENT_RANGE_GETS для hf-xet, HF_HUB_DOWNLOAD_CONCURRENCY для стандартного HTTP).&#10;Меньше = меньше нагрузка на канал. Рекомендуется: 2-4.">Параллельность:</span>
+        <input type="number" id="dl-concurrency" class="dl-ctrl-input" value="4" min="1" max="64" step="1">
+      </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Таймаут на загрузку одного файла (часы).&#10;При зависании процесс завершится. 0 = без ограничений.">Таймаут ч:</span>
+        <input type="number" id="dl-timeout" class="dl-ctrl-input" value="2" min="0" max="48" step="0.5">
+      </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Мягкий лимит скорости загрузки в Mbit/s.&#10;Устанавливается через авто-расчёт параллельности (concurrency = Mbit/25).&#10;Для жёсткого лимита используйте tc/wondershaper на уровне ОС.&#10;0 или пусто = без лимита. Перекрывает поле Параллельность.">Лимит Mbit/s:</span>
+        <input type="number" id="dl-bandwidth" class="dl-ctrl-input" value="" min="0" max="10000" step="10" placeholder="∞">
+      </div>
+      <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели">Скачать enabled</button>
+    </div>
+    <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none;margin-left:auto">Отменить</button>
     <span class="status-msg" id="dl-status-msg"></span>
   </div>
   <div class="download-panel" id="download-panel" style="display:none">
@@ -1689,11 +1720,22 @@ async function dlStart() {
   const cancelBtn = document.getElementById('dl-cancel-btn');
   const panel     = document.getElementById('download-panel');
   const statusMsg = document.getElementById('dl-status-msg');
+  const controls  = document.getElementById('dl-controls');
+
+  const concurrency = parseInt(document.getElementById('dl-concurrency').value, 10) || 4;
+  const timeout     = parseFloat(document.getElementById('dl-timeout').value) ?? 2;
+  // bandwidth_limit: 0 or empty string → null (no limit); positive number → Mbit/s soft cap
+  const _bwRaw  = parseFloat(document.getElementById('dl-bandwidth').value);
+  const bandwidth = (!isNaN(_bwRaw) && _bwRaw > 0) ? _bwRaw : null;
 
   startBtn.disabled = true;
   statusMsg.style.display = 'none';
   try {
-    const resp = await fetch('/api/download/start', { method: 'POST' });
+    const resp = await fetch('/api/download/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ max_concurrency: concurrency, download_timeout: timeout, bandwidth_limit: bandwidth }),
+    });
     const data = await resp.json();
     if (!resp.ok) {
       statusMsg.className = 'status-msg err';
@@ -1710,8 +1752,8 @@ async function dlStart() {
     return;
   }
 
-  // Show UI
-  startBtn.style.display = 'none';
+  // Hide controls and start button, show cancel
+  controls.style.display = 'none';
   cancelBtn.style.display = '';
   cancelBtn.disabled = false;
   panel.style.display = '';
@@ -1778,12 +1820,13 @@ function dlDone() {
   if (_dlEventSource) { _dlEventSource.close(); _dlEventSource = null; }
   const startBtn  = document.getElementById('dl-start-btn');
   const cancelBtn = document.getElementById('dl-cancel-btn');
+  const controls  = document.getElementById('dl-controls');
   const panel     = document.getElementById('download-panel');
 
   document.getElementById('dl-progress-bar').style.width = '100%';
   cancelBtn.style.display = 'none';
   document.getElementById('dl-cancel-btn-panel').style.display = 'none';
-  startBtn.style.display  = '';
+  controls.style.display = '';
   startBtn.disabled = false;
 
   // Build completion summary from last SSE snapshot
@@ -1878,6 +1921,42 @@ def get_models_json(config_path: Path) -> list[dict]:
     return result
 
 
+# ─── Security Helpers ─────────────────────────────────────────────────────────
+
+# Mirrors the client-side JS validateDestDir regex.
+# Allowed: lowercase letters, digits, hyphens, underscores; max 3 path levels.
+# Examples: "misc", "llm/qwen", "embeddings/russian"
+_DEST_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*){0,2}$")
+
+# Allowed: author/model-name  (HuggingFace standard)
+_REPO_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.\-]+$")
+
+
+def _validate_dest_dir(dest_dir: str, models_dir: Optional[Path] = None) -> None:
+    """
+    Validate dest_dir against path traversal attacks.
+
+    1. Regex check — only safe characters / depth (client JS has the same rule).
+    2. Path resolution check — ensures the resolved path stays inside models_dir.
+
+    Raises ValueError with a descriptive message on any violation.
+    """
+    if not _DEST_DIR_RE.match(dest_dir):
+        raise ValueError(
+            f"Недопустимый dest_dir '{dest_dir}': разрешены строчные буквы, цифры, "
+            "дефис, подчёркивание; максимум 3 уровня пути (напр. 'llm/qwen')"
+        )
+    if models_dir is not None:
+        resolved = (models_dir / dest_dir).resolve()
+        try:
+            resolved.relative_to(models_dir.resolve())
+        except ValueError:
+            raise ValueError(
+                f"dest_dir '{dest_dir}' выходит за пределы директории моделей — "
+                "path traversal недопустим"
+            )
+
+
 def save_models(config_path: Path, updates: list[dict]) -> None:
     """
     Atomically update model entries in models.yaml.
@@ -1908,9 +1987,10 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
             continue
         u = update_map[key]
 
-        # dest_dir change → move file if it exists
+        # dest_dir change → validate first, then move file if it exists
         if "dest_dir" in u:
             new_dir = str(u["dest_dir"]).strip() or "misc"
+            _validate_dest_dir(new_dir, models_dir)  # raises ValueError on violation
             old_dir = str(item.get("dest_dir", "misc"))
             if old_dir != new_dir:
                 old_path = models_dir / old_dir / item["filename"]
@@ -2126,6 +2206,21 @@ def add_models_to_yaml(
         if not repo_id or not filename:
             continue
 
+        # Server-side validation (client JS can be bypassed via curl/API)
+        if not _REPO_ID_RE.match(repo_id):
+            skipped.append(f"INVALID_REPO_ID:{repo_id}")
+            continue
+        if Path(filename).name != filename:
+            skipped.append(f"INVALID_FILENAME:{filename}")
+            continue
+
+        raw_dest_dir = str(item.get("dest_dir", "misc") or "misc")
+        try:
+            _validate_dest_dir(raw_dest_dir)  # no models_dir: no file ops here
+        except ValueError as exc:
+            skipped.append(f"INVALID_DEST_DIR:{raw_dest_dir} ({exc})")
+            continue
+
         key = (repo_id, filename)
         if key in existing_keys:
             skipped.append(f"{repo_id}::{filename}")
@@ -2146,7 +2241,7 @@ def add_models_to_yaml(
         entry: dict[str, Any] = {
             "repo_id": repo_id,
             "filename": filename,
-            "dest_dir": str(item.get("dest_dir", "misc") or "misc"),
+            "dest_dir": raw_dest_dir,
             "enabled": bool(item.get("enabled", False)),
             "gated": bool(item.get("gated", False)),
             "tags": tags,
@@ -2176,6 +2271,12 @@ def delete_model(
 
     Возвращает {"removed_yaml": bool, "removed_file": bool, "file_path": str|None}.
     """
+    # Filename must not contain path separators (prevents traversal via crafted filename)
+    if Path(filename).name != filename:
+        raise ValueError(
+            f"Недопустимое имя файла '{filename}': разделители пути не разрешены"
+        )
+
     raw = load_yaml(config_path)
     settings: dict = raw.get("settings", {})
     models_dir = Path(settings.get("models_dir", "./models"))
@@ -2360,6 +2461,30 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/download/start":
+            # Parse optional throttle params from JSON body (sent by UI controls)
+            try:
+                params = json.loads(body) if body else {}
+            except (json.JSONDecodeError, ValueError):
+                params = {}
+            try:
+                max_concurrency: Optional[int] = int(params["max_concurrency"]) \
+                    if params.get("max_concurrency") is not None else None
+            except (ValueError, TypeError):
+                max_concurrency = None
+            try:
+                download_timeout: Optional[float] = float(params["download_timeout"]) \
+                    if params.get("download_timeout") is not None else None
+            except (ValueError, TypeError):
+                download_timeout = None
+            try:
+                _bw_raw = params.get("bandwidth_limit")
+                bandwidth_limit_mbps: Optional[float] = float(_bw_raw) if _bw_raw is not None else None
+                # Treat 0 as "no limit"
+                if bandwidth_limit_mbps is not None and bandwidth_limit_mbps <= 0:
+                    bandwidth_limit_mbps = None
+            except (ValueError, TypeError):
+                bandwidth_limit_mbps = None
+
             with _dl_lock:
                 if download_state["running"]:
                     self._send_json({"error": "Download already running"}, status=409)
@@ -2380,10 +2505,10 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 download_state["model_count"] = enabled_count
                 download_state["done_count"] = 0
                 download_state["status_map"] = {}
-            # Start background download thread
+            # Start background download thread with throttle params from UI
             t = threading.Thread(
                 target=_download_worker,
-                args=(self.config_path,),
+                args=(self.config_path, max_concurrency, download_timeout, bandwidth_limit_mbps),
                 daemon=True,
             )
             t.start()
@@ -2440,7 +2565,12 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
 # ─── Download Worker ──────────────────────────────────────────────────────────
 
 
-def _download_worker(config_path: Path) -> None:
+def _download_worker(
+    config_path: Path,
+    max_concurrency: Optional[int] = None,
+    download_timeout: Optional[float] = None,
+    bandwidth_limit_mbps: Optional[float] = None,
+) -> None:
     """
     Background thread that runs download_models.py as a subprocess.
 
@@ -2449,12 +2579,23 @@ def _download_worker(config_path: Path) -> None:
       [repo_id] — начало модели
       [OK]  / [SKIP] / [ERR] — результат
     Updates download_state fields under _dl_lock.
+
+    Args:
+        max_concurrency:    --max-concurrency N  (HuggingFace Xet / HTTP parallel connections)
+        download_timeout:   --download-timeout H (per-file timeout in hours, 0=unlimited)
+        bandwidth_limit_mbps: --bandwidth-limit M (soft cap via concurrency compensation, Mbit/s)
     """
     script = Path(__file__).parent / "download_models.py"
     cmd = [
         sys.executable, str(script),
         "--config", str(config_path),
     ]
+    if max_concurrency is not None:
+        cmd += ["--max-concurrency", str(int(max_concurrency))]
+    if download_timeout is not None:
+        cmd += ["--download-timeout", str(float(download_timeout))]
+    if bandwidth_limit_mbps is not None:
+        cmd += ["--bandwidth-limit", str(float(bandwidth_limit_mbps))]
 
     try:
         proc = subprocess.Popen(
