@@ -316,6 +316,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .cell-hf-files { font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem;
                    color: var(--text-secondary); }
   .file-item { display: block; padding: 1px 0; }
+  .file-size { color: var(--text-muted); font-size: 0.68rem; margin-left: 6px; font-family: monospace; }
   .downloads { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
   .select-cb { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
   #hf-empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; display: none; }
@@ -496,6 +497,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="hf-field">
         <label>Лимит</label>
         <input type="number" id="hf-limit" value="20" min="1" max="50">
+      </div>
+      <div class="hf-field">
+        <label>Макс. размер (GB)</label>
+        <input type="number" id="hf-max-size" placeholder="∞" min="0" step="0.5" oninput="hfApplySizeFilter()">
       </div>
       <button class="btn-primary" id="hf-search-btn" onclick="hfSearch()">Искать</button>
     </div>
@@ -890,38 +895,48 @@ function renderHfResults(results) {
   document.getElementById('hf-results-count').textContent = '';
 
   results.forEach(r => {
-    const files = r.files && r.files.length > 0 ? r.files : [null];
-    files.forEach((fname, fi) => {
+    // files is now [{name, size_bytes}, ...] or [] → normalise to [{name, size_bytes}] or [null]
+    const rawFiles = r.files && r.files.length > 0 ? r.files : [null];
+    rawFiles.forEach((fileObj, fi) => {
+      const fname = fileObj ? (typeof fileObj === 'object' ? fileObj.name : fileObj) : null;
+      const fsize = fileObj && typeof fileObj === 'object' ? fileObj.size_bytes : null;
       const key = r.repo_id + '||' + (fname || '');
       const tr = document.createElement('tr');
       tr.dataset.key = key;
+      // Store size_bytes on the row so the filter can read it
+      if (fsize != null) tr.dataset.sizeBytes = fsize;
 
-      // checkbox
+      // checkbox — не рендерим для строк без файла (нет смысла выбирать)
       const tdCb = document.createElement('td');
-      const cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
-      cb.onchange = () => hfSelectionChange(cb, r, fname);
-      tdCb.appendChild(cb);
+      if (fname) {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
+        cb.onchange = () => hfSelectionChange(cb, r, fname);
+        tdCb.appendChild(cb);
+      }
       tr.appendChild(tdCb);
 
       // repo — только на первой строке файлов репозитория
       if (fi === 0) {
         const tdRepo = document.createElement('td');
         tdRepo.className = 'cell-hf-repo';
-        if (files.length > 1) tdRepo.rowSpan = files.length;
+        if (rawFiles.length > 1) tdRepo.rowSpan = rawFiles.length;
         tdRepo.innerHTML =
           `<a href="https://huggingface.co/${escHtml(r.repo_id)}" target="_blank">${escHtml(r.repo_id)}</a>` +
           (r.gated ? '<span class="gated-badge">GATED</span>' : '');
         tr.appendChild(tdRepo);
       }
 
-      // filename
+      // filename + size
       const tdFile = document.createElement('td');
       tdFile.className = 'cell-hf-files';
       if (fname) {
-        tdFile.innerHTML = `<span class="file-item">${escHtml(fname)}</span>`;
+        const sizeHtml = fsize != null
+          ? `<span class="file-size">${fmtSize(fsize)}</span>`
+          : '';
+        tdFile.innerHTML = `<span class="file-item">${escHtml(fname)}${sizeHtml}</span>`;
       } else {
-        tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов (укажите regex)</span>`;
+        tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов по фильтру</span>`;
       }
       tr.appendChild(tdFile);
 
@@ -929,12 +944,12 @@ function renderHfResults(results) {
       if (fi === 0) {
         const tdDl = document.createElement('td');
         tdDl.className = 'downloads';
-        if (files.length > 1) tdDl.rowSpan = files.length;
+        if (rawFiles.length > 1) tdDl.rowSpan = rawFiles.length;
         tdDl.textContent = fmtNum(r.downloads);
         tr.appendChild(tdDl);
 
         const tdTags = document.createElement('td');
-        if (files.length > 1) tdTags.rowSpan = files.length;
+        if (rawFiles.length > 1) tdTags.rowSpan = rawFiles.length;
         tdTags.innerHTML = '<div class="tags-cell">' +
           (r.tags || []).slice(0, 6).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') +
           '</div>';
@@ -944,6 +959,9 @@ function renderHfResults(results) {
       tbody.appendChild(tr);
     });
   });
+
+  // Apply size filter after rendering
+  hfApplySizeFilter();
 }
 
 function hfSelectionChange(cb, r, fname) {
@@ -962,6 +980,7 @@ function hfSelectionChange(cb, r, fname) {
 
 function hfToggleAll(masterCb) {
   document.querySelectorAll('#hf-results-body .select-cb').forEach(cb => {
+    if (cb.closest('tr').style.display === 'none') return; // skip filtered-out rows
     cb.checked = masterCb.checked;
     const key = cb.dataset.key;
     const [repo_id, fname] = key.split('||');
@@ -973,6 +992,32 @@ function hfToggleAll(masterCb) {
       hfSelected.delete(key);
     }
   });
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+}
+
+function hfApplySizeFilter() {
+  const maxGbVal = document.getElementById('hf-max-size').value.trim();
+  const maxBytes = maxGbVal !== '' ? parseFloat(maxGbVal) * 1024 * 1024 * 1024 : null;
+  document.querySelectorAll('#hf-results-body tr').forEach(tr => {
+    if (maxBytes === null || isNaN(maxBytes)) {
+      tr.style.display = '';
+      return;
+    }
+    const sizeBytes = tr.dataset.sizeBytes != null ? parseFloat(tr.dataset.sizeBytes) : null;
+    // Hide only rows where size is known AND exceeds the limit
+    if (sizeBytes != null && sizeBytes > maxBytes) {
+      tr.style.display = 'none';
+      // Uncheck and deselect if hidden
+      const cb = tr.querySelector('.select-cb');
+      if (cb && cb.checked) {
+        cb.checked = false;
+        hfSelected.delete(cb.dataset.key);
+      }
+    } else {
+      tr.style.display = '';
+    }
+  });
+  // Update add button state
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
 }
 
@@ -1313,17 +1358,23 @@ def search_hf(
     results = []
     for m in models:
         # Фильтрация файлов через siblings (не требует отдельного запроса)
+        AI_EXTS = ('.gguf', '.safetensors', '.bin', '.pt', '.pth', '.ckpt')
         if compiled_re is not None:
             siblings = m.siblings or []
-            matched_files = sorted(
-                s.rfilename for s in siblings
+            files = [
+                {"name": s.rfilename, "size_bytes": getattr(s, "size", None)}
+                for s in sorted(siblings, key=lambda x: x.rfilename)
                 if compiled_re.search(s.rfilename)
-            )
-            if not matched_files:
+            ]
+            if not files:
                 continue  # пропускаем репо без совпадений
-            files = matched_files
         else:
-            files = []
+            siblings = m.siblings or []
+            files = [
+                {"name": s.rfilename, "size_bytes": getattr(s, "size", None)}
+                for s in sorted(siblings, key=lambda x: x.rfilename)
+                if s.rfilename.lower().endswith(AI_EXTS)
+            ]
 
         tags_raw = m.tags or []
         tags = [t for t in tags_raw if ":" not in t][:8]
