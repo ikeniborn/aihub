@@ -1,0 +1,21 @@
+[project]
+name = "aihub"
+version = "0.1.0"
+description = "CLI tools for downloading AI models and syncing to S3 storage"
+requires-python = ">=3.9"
+dependencies = [
+    # Core downloader dependencies
+    "huggingface_hub>=0.21.0",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "tqdm>=4.66",
+    # Optional: Rust-based fast download (recommended)
+    # Set HF_HUB_ENABLE_HF_TRANSFER=1 in .env to activate
+    "hf_transfer>=0.1.4",
+    # S3 / object storage support (AWS S3, MinIO, Yandex, Cloudflare R2, etc.)
+    "boto3>=1.26.0",
+]
+
+[tool.uv]
+# uv support: run `uv sync` to create .venv and install dependencies
+# If uv is not available, use: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
