@@ -1,0 +1,9 @@
+# Core downloader dependencies
+huggingface_hub>=0.21.0
+PyYAML>=6.0
+python-dotenv>=1.0
+tqdm>=4.66
+
+# Optional: Rust-based fast download (recommended)
+# Set HF_HUB_ENABLE_HF_TRANSFER=1 in .env to activate
+hf_transfer>=0.1.4
