@@ -28,22 +28,44 @@ Repository Not Found for url: https://huggingface.co/.../resolve/main/model.gguf
 
 ### Причины и решения
 
-**A. Имя файла изменилось в репозитории**
+**A. Репозиторий переименован**
 
-Авторы периодически переименовывают квантизации. Проверь актуальные имена файлов:
+Авторы периодически меняют имена репозиториев. Например, `bartowski/Llama-3.1-8B-Instruct-GGUF` был переименован в `bartowski/Meta-Llama-3.1-8B-Instruct-GGUF`.
+
+Найди актуальное имя поиском:
 
 ```bash
 .venv/bin/python -c "
+import yaml
 from huggingface_hub import HfApi
-api = HfApi()
-for f in api.list_repo_files('bartowski/Llama-3.1-8B-Instruct-GGUF'):
-    print(f)
+with open('credentials.yaml') as f:
+    token = yaml.safe_load(f).get('huggingface', {}).get('token', '')
+api = HfApi(token=token)
+for r in api.list_models(author='bartowski', search='Llama-3.1-8B'):
+    print(r.id)
 "
 ```
 
-Обнови `filename` в `models.yaml` под актуальное имя.
+Обнови `repo_id` и `filename` в `models.yaml`.
 
-**B. Репозиторий перемещён или удалён**
+**B. Имя файла изменилось**
+
+После переименования репо обычно меняется и имя файла. Проверь актуальные файлы:
+
+```bash
+.venv/bin/python -c "
+import yaml
+from huggingface_hub import HfApi
+with open('credentials.yaml') as f:
+    token = yaml.safe_load(f).get('huggingface', {}).get('token', '')
+api = HfApi(token=token)
+for f in api.list_repo_files('bartowski/Meta-Llama-3.1-8B-Instruct-GGUF'):
+    if 'Q4_K_M' in f:
+        print(f)
+"
+```
+
+**C. Репозиторий удалён**
 
 Открой страницу репозитория в браузере:
 ```

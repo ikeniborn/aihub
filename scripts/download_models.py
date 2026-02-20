@@ -45,9 +45,9 @@ import yaml
 from dotenv import load_dotenv
 from tqdm import tqdm
 
-# Shared utilities (fmt_size, load_hf_token)
+# Shared utilities (fmt_size, load_hf_token, load_proxy_config)
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import fmt_size, load_hf_token  # noqa: E402
+from utils import fmt_size, load_hf_token, load_proxy_config  # noqa: E402
 
 
 # ─── Data Classes ─────────────────────────────────────────────────────────────
@@ -249,7 +249,7 @@ def check_existing(
         if local_etag is None:
             remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
             if remote_etag is None:
-                print(
+                tqdm.write(
                     f"  [WARN] Cannot determine ETag for {model.repo_id}/{model.filename};"
                     " defaulting to SKIP (use --force to override)"
                 )
@@ -259,14 +259,14 @@ def check_existing(
 
         remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
         if remote_etag is None:
-            print(
+            tqdm.write(
                 f"  [WARN] Cannot fetch remote ETag for {model.repo_id}/{model.filename};"
                 " keeping existing file"
             )
             return "SKIP"
 
         if local_etag != remote_etag:
-            print(f"  [INFO] ETag changed — will re-download {model.filename}")
+            tqdm.write(f"  [INFO] ETag changed — will re-download {model.filename}")
             return "DOWNLOAD"
 
         return "SKIP"
@@ -286,10 +286,17 @@ def _s3_key(model: ModelEntry, prefix: str) -> str:
     return f"{model.dest_dir}/{model.filename}"
 
 
-def _s3_client(cfg: S3Config) -> Any:
-    """Create a boto3 S3 client from S3Config. Returns boto3.client (typed as Any)."""
+def _s3_client(cfg: S3Config, proxies: Optional[dict] = None) -> Any:
+    """Create a boto3 S3 client from S3Config. Returns boto3.client (typed as Any).
+
+    Args:
+        cfg:     S3 connection configuration.
+        proxies: Optional dict {"http": url, "https": url} for proxy routing.
+                 Passed explicitly to botocore so it works regardless of env var state.
+    """
     try:
         import boto3
+        from botocore.config import Config as BotocoreConfig
     except ImportError:
         raise ImportError("boto3 is required for S3 support. Run: pip install boto3")
 
@@ -300,6 +307,8 @@ def _s3_client(cfg: S3Config) -> Any:
     }
     if cfg.endpoint_url:
         kwargs["endpoint_url"] = cfg.endpoint_url
+    if proxies:
+        kwargs["config"] = BotocoreConfig(proxies=proxies)
     return boto3.client("s3", **kwargs)
 
 
@@ -374,7 +383,7 @@ def s3_upload_file(
         )
 
         endpoint_display = cfg.endpoint_url or "s3.amazonaws.com"
-        print(
+        tqdm.write(
             f"  Uploading to s3://{cfg.bucket}/{key}"
             f"  [{endpoint_display}]  ({fmt_size(file_size)}) ..."
         )
@@ -449,9 +458,9 @@ def download_model(
     for attempt in range(retry_count + 1):
         try:
             if attempt > 0:
-                print(f"  [RETRY {attempt}/{retry_count}] {model.repo_id}/{model.filename}")
+                tqdm.write(f"  [RETRY {attempt}/{retry_count}] {model.repo_id}/{model.filename}")
             else:
-                print(f"  Downloading {model.repo_id}/{model.filename} ...")
+                tqdm.write(f"  Downloading {model.repo_id}/{model.filename} ...")
 
             downloaded_path = hf_hub_download(
                 repo_id=model.repo_id,
@@ -507,11 +516,11 @@ def download_model(
             # Задержка перед повтором: rate limit — x10 от базовой, остальное — экспоненциально
             if is_rate_limit:
                 wait = retry_delay * 10
-                print(f"  [WARN] Rate limit (429) — ждём {wait:.0f}s перед повтором ...")
+                tqdm.write(f"  [WARN] Rate limit (429) — ждём {wait:.0f}s перед повтором ...")
             else:
                 wait = retry_delay * (2 ** attempt)
-                print(f"  [WARN] Ошибка (попытка {attempt + 1}/{retry_count + 1}): {exc}")
-                print(f"         Повтор через {wait:.0f}s ...")
+                tqdm.write(f"  [WARN] Ошибка (попытка {attempt + 1}/{retry_count + 1}): {exc}")
+                tqdm.write(f"         Повтор через {wait:.0f}s ...")
             time.sleep(wait)
 
     return DownloadResult(model=model, status="ERROR", error=str(last_exc))
@@ -554,22 +563,22 @@ def sync_model_to_s3(
 
     if s3_decision == "SKIP":
         result.s3_status = "SKIP"
-        print(f"  [S3-SKIP] Already in s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
+        tqdm.write(f"  [S3-SKIP] Already in s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
         return result
 
     if s3_decision == "ERROR":
         result.s3_status = "ERROR"
         result.s3_error = "Cannot reach S3 (check credentials / endpoint)"
-        print(f"  [S3-ERR]  {result.s3_error}")
+        tqdm.write(f"  [S3-ERR]  {result.s3_error}")
         return result
 
     status, error = s3_upload_file(result.local_path, result.model, s3_cfg)
     result.s3_status = status
     result.s3_error = error
     if status == "UPLOADED":
-        print(f"  [S3-OK]   Uploaded to s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
+        tqdm.write(f"  [S3-OK]   Uploaded to s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
     else:
-        print(f"  [S3-ERR]  Upload failed: {error}")
+        tqdm.write(f"  [S3-ERR]  Upload failed: {error}")
 
     return result
 
@@ -765,6 +774,14 @@ def main() -> int:
     # Load .env first (lowest priority — credentials.yaml overrides these)
     load_dotenv(dotenv_path=".env", override=False)
 
+    # Configure proxy (reads PROXY_ENABLED + PROXY_URL from env / credentials.yaml)
+    proxy_cfg = load_proxy_config(Path(args.creds))
+    if proxy_cfg.valid:
+        proxy_cfg.apply_to_env()
+        print(f"[INFO] Proxy enabled: {proxy_cfg.url}")
+    else:
+        print("[INFO] Proxy: disabled")
+
     # Load credentials from credentials.yaml (with .env as fallback)
     hf_token, s3_cfg = load_credentials(Path(args.creds))
 
@@ -845,10 +862,10 @@ def main() -> int:
     try:
         for model in tqdm(candidates, desc="Models", unit="model", leave=True):
             repo_label = f"{model.repo_id}/{model.filename}"
-            print(f"[{model.repo_id.split('/')[-1]}]")
+            tqdm.write(f"[{model.repo_id.split('/')[-1]}]")
 
             if model.gated and not hf_token:
-                print(
+                tqdm.write(
                     f"  [SKIP/GATED] {repo_label}\n"
                     f"  Set HF_TOKEN in credentials.yaml or .env and accept the license at:\n"
                     f"  https://huggingface.co/{model.repo_id}"
@@ -874,13 +891,13 @@ def main() -> int:
             )
 
             if result.status == "SKIP":
-                print(f"  [SKIP] Already current: {result.local_path}")
+                tqdm.write(f"  [SKIP] Already current: {result.local_path}")
             elif result.status == "DOWNLOAD":
-                print(f"  [OK]   Saved to: {result.local_path}  ({fmt_size(result.size_bytes)})")
+                tqdm.write(f"  [OK]   Saved to: {result.local_path}  ({fmt_size(result.size_bytes)})")
             elif result.status == "DRYRUN":
-                print(f"  [OK]   Repository valid: {model.repo_id}")
+                tqdm.write(f"  [OK]   Repository valid: {model.repo_id}")
             elif result.status == "ERROR":
-                print(f"  [ERR]  {result.error}")
+                tqdm.write(f"  [ERR]  {result.error}")
 
             # S3 upload (if requested and download succeeded)
             if use_s3:
