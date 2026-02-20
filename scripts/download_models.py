@@ -31,11 +31,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import shutil
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -47,7 +49,54 @@ from tqdm import tqdm
 
 # Shared utilities (fmt_size, load_hf_token, load_proxy_config)
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import fmt_size, load_hf_token, load_proxy_config  # noqa: E402
+from utils import fmt_size, load_hf_token, load_proxy_config, mask_proxy_url  # noqa: E402
+
+
+# ─── Process Guard ────────────────────────────────────────────────────────────
+
+
+_LOCK_FILE = Path(__file__).parent.parent / ".download.lock"
+
+
+def _acquire_lock() -> None:
+    """
+    Acquire an exclusive file lock to prevent multiple simultaneous instances.
+    Registers atexit cleanup so the lock is released on any exit path
+    (normal, exception, Ctrl+C, sys.exit) — no bandwidth zombies possible.
+    """
+    import atexit
+
+    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = _LOCK_FILE.open("w")
+    try:
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        existing_pid = ""
+        try:
+            existing_pid = _LOCK_FILE.read_text().strip()
+        except OSError:
+            pass
+        pid_info = f"PID {existing_pid}" if existing_pid else "unknown PID"
+        print(
+            f"[ERROR] Another download_models.py is already running ({pid_info}).\n"
+            f"        If no process is running, delete the lock file:\n"
+            f"        rm {_LOCK_FILE}",
+            file=sys.stderr,
+        )
+        lock_fd.close()
+        sys.exit(2)
+
+    lock_fd.write(str(os.getpid()))
+    lock_fd.flush()
+
+    def _release() -> None:
+        lock_fd.close()
+        try:
+            _LOCK_FILE.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    atexit.register(_release)
 
 
 # ─── Data Classes ─────────────────────────────────────────────────────────────
@@ -402,6 +451,44 @@ def s3_upload_file(
 # ─── Download ─────────────────────────────────────────────────────────────────
 
 
+def _hf_download_with_timeout(timeout_secs: Optional[float], **kwargs) -> str:
+    """
+    Wrap hf_hub_download() in a daemon thread with a hard timeout.
+
+    If the download stalls longer than timeout_secs, raises TimeoutError.
+    The thread is marked daemon=True so it is killed automatically when the
+    main process exits — preventing bandwidth zombies.
+    """
+    if timeout_secs is None or timeout_secs <= 0:
+        from huggingface_hub import hf_hub_download
+        return hf_hub_download(**kwargs)
+
+    result: list = [None]
+    exc: list = [None]
+
+    def _run() -> None:
+        try:
+            from huggingface_hub import hf_hub_download
+            result[0] = hf_hub_download(**kwargs)
+        except Exception as e:  # noqa: BLE001
+            exc[0] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(timeout=timeout_secs)
+
+    if t.is_alive():
+        hours = timeout_secs / 3600
+        raise TimeoutError(
+            f"Download stalled for over {hours:.1f}h with no completion.\n"
+            f"  Process will exit to free bandwidth. "
+            f"Adjust download_timeout_hours in models.yaml or use --download-timeout."
+        )
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]  # type: ignore[return-value]
+
+
 def download_model(
     model: ModelEntry,
     models_root: Path,
@@ -411,6 +498,7 @@ def download_model(
     dry_run: bool,
     retry_count: int = 3,
     retry_delay: float = 5.0,
+    download_timeout: Optional[float] = None,
 ) -> DownloadResult:
     """
     Download a single model file.  Idempotent: checks ETag before downloading.
@@ -462,7 +550,8 @@ def download_model(
             else:
                 tqdm.write(f"  Downloading {model.repo_id}/{model.filename} ...")
 
-            downloaded_path = hf_hub_download(
+            downloaded_path = _hf_download_with_timeout(
+                download_timeout,
                 repo_id=model.repo_id,
                 filename=model.filename,
                 local_dir=str(local_dir),
@@ -494,6 +583,8 @@ def download_model(
                 size_bytes=downloaded.stat().st_size,
             )
 
+        except TimeoutError:
+            raise  # propagate to main() — exit the entire process
         except EntryNotFoundError:
             # Файл не найден в репо — не имеет смысла повторять
             return DownloadResult(
@@ -749,6 +840,47 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECS",
         help="Пауза между скачиваниями разных моделей в секундах (default: 0)",
     )
+    # Bandwidth / concurrency throttling
+    bw_group = p.add_argument_group("Bandwidth и параллельность")
+    bw_group.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Максимальное число параллельных соединений при загрузке. "
+            "Для hf-xet (default backend, 2025+): устанавливает HF_XET_NUM_CONCURRENT_RANGE_GETS "
+            "(default=16 диапазонных запросов на файл). "
+            "Для standard HTTP / hf_transfer (legacy): устанавливает HF_HUB_DOWNLOAD_CONCURRENCY. "
+            "По умолчанию из models.yaml (hf_download_concurrency), иначе не ограничено. "
+            "Рекомендуется 2-4 для снижения нагрузки на канал."
+        ),
+    )
+    bw_group.add_argument(
+        "--bandwidth-limit",
+        type=float,
+        default=None,
+        metavar="MBIT",
+        help=(
+            "Мягкое ограничение скорости загрузки в Mbit/s через авто-расчёт параллельности "
+            "(concurrency = bandwidth_mbps / 25, минимум 1). "
+            "Не является аппаратным ограничением — для жёсткого лимита используйте "
+            "tc/wondershaper/trickle на уровне ОС. "
+            "По умолчанию из models.yaml (bandwidth_limit_mbps). "
+            "Не учитывается если --max-concurrency задан явно."
+        ),
+    )
+    bw_group.add_argument(
+        "--download-timeout",
+        type=float,
+        default=None,
+        metavar="HOURS",
+        help=(
+            "Максимальное время загрузки одного файла в часах. Если загрузка зависла "
+            "дольше этого времени — процесс аварийно завершается (kill zombie). "
+            "По умолчанию из models.yaml (download_timeout_hours). 0 = без ограничения."
+        ),
+    )
     # S3 options
     s3_group = p.add_argument_group("S3")
     s3_group.add_argument(
@@ -773,11 +905,14 @@ def main() -> int:
     # Load .env first (lowest priority — credentials.yaml overrides these)
     load_dotenv(dotenv_path=".env", override=False)
 
+    # Prevent multiple simultaneous instances — one download process at a time
+    _acquire_lock()
+
     # Configure proxy (reads PROXY_ENABLED + PROXY_URL from env / credentials.yaml)
     proxy_cfg = load_proxy_config(Path(args.creds))
     if proxy_cfg.valid:
         proxy_cfg.apply_to_env()
-        print(f"[INFO] Proxy enabled: {proxy_cfg.url}")
+        print(f"[INFO] Proxy enabled: {mask_proxy_url(proxy_cfg.url)}")
     else:
         print("[INFO] Proxy: disabled")
 
@@ -789,13 +924,38 @@ def main() -> int:
     else:
         print("[INFO] No HF_TOKEN found — gated models will fail")
 
-    # Enable fast transfers if requested
-    if os.environ.get("HF_HUB_ENABLE_HF_TRANSFER") == "1":
+    # Detect active download backend and log the real protocol in use.
+    # hf-xet (Xet storage backend) is now the default for HuggingFace Hub (2025+).
+    # hf_transfer (legacy Rust backend) is deprecated and has no effect when hf-xet is installed.
+    # HF_HUB_ENABLE_HF_TRANSFER is deprecated; use HF_XET_HIGH_PERFORMANCE for maximum speed.
+    _xet_disabled = os.environ.get("HF_HUB_DISABLE_XET", "").strip().lower() in ("1", "true", "yes", "on")
+    _hf_transfer_requested = os.environ.get("HF_HUB_ENABLE_HF_TRANSFER", "") == "1"
+    _active_backend = "standard"
+
+    if not _xet_disabled:
         try:
-            import hf_transfer  # noqa: F401
-            print("[INFO] hf_transfer enabled (fast Rust-based downloads)")
+            import hf_xet  # noqa: F401
+            _active_backend = "xet"
+            if _hf_transfer_requested:
+                print(
+                    "[WARN] HF_HUB_ENABLE_HF_TRANSFER=1 is set but hf-xet is active — "
+                    "HF_HUB_ENABLE_HF_TRANSFER is deprecated and has no effect when hf-xet is installed. "
+                    "Use HF_XET_HIGH_PERFORMANCE=1 for maximum download speed instead."
+                )
+            print("[INFO] Download backend: hf-xet (Xet storage backend, chunk-based deduplication)")
         except ImportError:
-            print("[WARN] HF_HUB_ENABLE_HF_TRANSFER=1 but hf_transfer not installed; ignored")
+            _xet_disabled = True  # hf-xet not installed, treat as disabled
+
+    if _xet_disabled or _active_backend == "standard":
+        if _hf_transfer_requested:
+            try:
+                import hf_transfer  # noqa: F401
+                _active_backend = "hf_transfer"
+                print("[INFO] Download backend: hf_transfer (legacy Rust-based, HF_HUB_ENABLE_HF_TRANSFER=1)")
+            except ImportError:
+                print("[WARN] HF_HUB_ENABLE_HF_TRANSFER=1 but hf_transfer not installed; using standard HTTP")
+        else:
+            print("[INFO] Download backend: standard HTTP (huggingface_hub)")
 
     # Determine S3 mode
     use_s3 = args.upload_s3 or args.s3_only
@@ -828,6 +988,87 @@ def main() -> int:
     inter_delay: float = args.delay if args.delay is not None else float(settings.get("inter_download_delay", 0.0))
 
     print(f"[INFO] Retry: {retry_count}x, base_delay={retry_delay}s, inter_delay={inter_delay}s")
+
+    # Per-file download timeout: kills the process if a download stalls (ghost protection).
+    _yaml_dt = settings.get("download_timeout_hours")
+    _cli_dt = args.download_timeout
+    _timeout_hours: Optional[float] = (
+        _cli_dt if _cli_dt is not None
+        else (float(_yaml_dt) if _yaml_dt is not None else None)
+    )
+    download_timeout_secs: Optional[float] = (
+        _timeout_hours * 3600 if (_timeout_hours is not None and _timeout_hours > 0) else None
+    )
+    if download_timeout_secs:
+        print(f"[INFO] Download timeout: {_timeout_hours:.1f}h per file (ghost process protection ON)")
+    else:
+        print("[INFO] Download timeout: disabled (set download_timeout_hours in models.yaml)")
+
+    # Bandwidth throttling: CLI overrides models.yaml, models.yaml overrides system default.
+    #
+    # Concurrency env vars by backend:
+    #   hf-xet (default):    HF_XET_NUM_CONCURRENT_RANGE_GETS  (default: 16 range-gets per file)
+    #   hf_transfer (legacy): HF_HUB_DOWNLOAD_CONCURRENCY       (chunk concurrency)
+    #   standard HTTP:        HF_HUB_DOWNLOAD_CONCURRENCY       (chunk concurrency)
+    #
+    # bandwidth_limit_mbps is not enforced by a hardware token-bucket — instead it drives
+    # automatic concurrency calculation as a soft cap approximation. For a hard bandwidth cap
+    # use OS-level tools: tc/wondershaper/trickle.
+    _yaml_concurrency = settings.get("hf_download_concurrency")
+    max_concurrency: Optional[int] = (
+        args.max_concurrency if args.max_concurrency is not None
+        else (int(_yaml_concurrency) if _yaml_concurrency is not None else None)
+    )
+
+    _yaml_bw = settings.get("bandwidth_limit_mbps")
+    bandwidth_limit_mbps: Optional[float] = (
+        args.bandwidth_limit if args.bandwidth_limit is not None
+        else (float(_yaml_bw) if _yaml_bw is not None else None)
+    )
+
+    # If bandwidth_limit_mbps is set but max_concurrency is not explicitly configured,
+    # auto-derive a concurrency value as soft compensation.
+    # Rough heuristic: each Xet range-get uses ~25 Mbit/s → concurrency = bw_mbps / 25 (min 1).
+    _concurrency_auto_derived = False
+    if bandwidth_limit_mbps is not None and max_concurrency is None:
+        max_concurrency = max(1, int(bandwidth_limit_mbps / 25))
+        _concurrency_auto_derived = True
+        print(
+            f"[WARN] bandwidth_limit_mbps={bandwidth_limit_mbps:.0f} is not a hard cap — "
+            f"setting concurrency={max_concurrency} as soft compensation "
+            f"(~{bandwidth_limit_mbps:.0f} Mbit/s ÷ 25 Mbit/connection). "
+            f"For a hard bandwidth cap use OS-level tc or wondershaper."
+        )
+
+    if max_concurrency is not None:
+        # Set the correct env var for the active download backend
+        if _active_backend == "xet":
+            os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] = str(max_concurrency)
+            # Also set the legacy var for safety (some hub versions may use it)
+            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = str(max_concurrency)
+            _src = "auto-derived from bandwidth_limit_mbps" if _concurrency_auto_derived else "config/CLI"
+            print(
+                f"[INFO] HF_XET_NUM_CONCURRENT_RANGE_GETS={max_concurrency} "
+                f"(limits Xet S3 range-get concurrency per file) [{_src}]"
+            )
+        else:
+            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = str(max_concurrency)
+            _src = "auto-derived from bandwidth_limit_mbps" if _concurrency_auto_derived else "config/CLI"
+            print(
+                f"[INFO] HF_HUB_DOWNLOAD_CONCURRENCY={max_concurrency} "
+                f"(limits parallel chunk downloads) [{_src}]"
+            )
+    else:
+        print("[INFO] Concurrency: not limited (using backend defaults)")
+
+    if bandwidth_limit_mbps is not None and not _concurrency_auto_derived:
+        print(
+            f"[INFO] Bandwidth limit: {bandwidth_limit_mbps:.1f} Mbit/s "
+            f"({bandwidth_limit_mbps / 8:.2f} MB/s) — soft cap via concurrency={max_concurrency}. "
+            f"For a hard cap use OS-level tc/wondershaper."
+        )
+    elif bandwidth_limit_mbps is None:
+        print("[INFO] Bandwidth limit: not set (unlimited)")
 
     # models_dir from settings can be overridden by S3-only mode (use temp dir)
     _s3_tmpdir: Optional[str] = None
@@ -878,16 +1119,26 @@ def main() -> int:
                 )
                 continue
 
-            result = download_model(
-                model=model,
-                models_root=models_root,
-                token=hf_token,
-                update_policy=update_policy,
-                force=args.force,
-                dry_run=args.dry_run,
-                retry_count=retry_count,
-                retry_delay=retry_delay,
-            )
+            try:
+                result = download_model(
+                    model=model,
+                    models_root=models_root,
+                    token=hf_token,
+                    update_policy=update_policy,
+                    force=args.force,
+                    dry_run=args.dry_run,
+                    retry_count=retry_count,
+                    retry_delay=retry_delay,
+                    download_timeout=download_timeout_secs,
+                )
+            except TimeoutError as te:
+                tqdm.write(f"\n[FATAL] {te}", file=sys.stderr)
+                tqdm.write(
+                    "[FATAL] Aborting all downloads to prevent bandwidth zombie.\n"
+                    "        Fix the network issue, then restart the script.",
+                    file=sys.stderr,
+                )
+                return 3
 
             if result.status == "SKIP":
                 tqdm.write(f"  [SKIP] Already current: {result.local_path}")
