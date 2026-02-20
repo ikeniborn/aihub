@@ -104,8 +104,9 @@ def load_proxy_config(creds_path: Optional[Path] = None) -> ProxyConfig:
             if raw_yaml_enabled is not None:
                 yaml_enabled = str(raw_yaml_enabled).strip().lower()
             yaml_url = str(proxy_section.get("url", "") or "").strip()
-        except Exception:
-            pass
+        except Exception as exc:
+            import sys
+            print(f"[WARN] Не удалось прочитать конфиг proxy из {creds_path}: {exc}", file=sys.stderr)
 
     # Применяем приоритет: env > yaml
     enabled_str = env_enabled if env_enabled else yaml_enabled

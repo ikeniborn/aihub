@@ -1414,6 +1414,14 @@ def search_hf(
     if language:
         kwargs["filter"] = language  # язык передаётся как тег-фильтр (ISO 639-1 код)
 
+    # Автоопределение library по file_regex: без этого HF API возвращает топ-N моделей
+    # глобально (BERT, GPT, CLIP…), у которых нет .gguf/.safetensors файлов → 0 результатов.
+    if file_regex and "library" not in kwargs and not query and not author:
+        if re.search(r"\.gguf", file_regex, re.IGNORECASE):
+            kwargs["library"] = "gguf"
+        elif re.search(r"\.safetensors", file_regex, re.IGNORECASE):
+            kwargs["library"] = "safetensors"
+
     models = list(api.list_models(**kwargs))
 
     results = []

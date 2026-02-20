@@ -94,7 +94,11 @@ def search_models(
 
     # Применяем regex к model_id
     if regex:
-        pattern = re.compile(regex, re.IGNORECASE)
+        try:
+            pattern = re.compile(regex, re.IGNORECASE)
+        except re.error as exc:
+            print(f"[ERROR] Невалидный --regex: {exc}", file=sys.stderr)
+            sys.exit(1)
         models = [m for m in models if pattern.search(m.id)]
 
     return models[:limit]
@@ -117,6 +121,7 @@ def list_files_for_repo(
         return []
 
     if file_regex:
+        # Regex already validated in main() — compile will not raise here
         pattern = re.compile(file_regex, re.IGNORECASE)
         files = [f for f in files if pattern.search(f)]
 
@@ -323,6 +328,14 @@ def main() -> int:
             if val:
                 setattr(args, attr, val)
                 print(f"[INFO] {env_key} из .env: {val!r}")
+
+    # Ранняя валидация --file-regex (до поиска, чтобы сразу показать ошибку)
+    if args.file_regex:
+        try:
+            re.compile(args.file_regex, re.IGNORECASE)
+        except re.error as exc:
+            print(f"[ERROR] Невалидный --file-regex: {exc}", file=sys.stderr)
+            return 1
 
     # Configure proxy (reads PROXY_ENABLED + PROXY_URL from env / credentials.yaml)
     proxy_cfg = load_proxy_config(Path(args.creds))
