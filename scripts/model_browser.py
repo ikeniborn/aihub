@@ -264,6 +264,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .model-edit-input.w-dir   { width: 150px; }
   .dir-move-note { font-size: 0.68rem; color: var(--yellow); margin-top: 2px; }
   .model-edit-actions { display: flex; gap: 8px; align-items: center; padding-bottom: 1px; }
+  /* ── Group rows (dest_dir tree) ── */
+  .group-row-l1 { background: #111827; cursor: pointer; user-select: none; }
+  .group-row-l1:hover { background: #1a2535; }
+  .group-row-l1 > td { padding: 7px 12px; font-size: 0.82rem; font-weight: 600; color: #a78bfa; border-bottom: 1px solid #1e2a40; }
+  .group-row-l2 { background: #0d1525; cursor: pointer; user-select: none; }
+  .group-row-l2:hover { background: #131e30; }
+  .group-row-l2 > td { padding: 5px 12px 5px 28px; font-size: 0.78rem; color: #7dd3fc; border-bottom: 1px solid #1a2030; }
+  .group-toggle { margin-right: 6px; font-size: 0.75rem; display: inline-block; width: 10px; }
+  .group-count { font-size: 0.7rem; color: var(--text-muted); font-weight: normal; margin-left: 6px; }
 
   /* ── HF Search panel ── */
   .hf-panel { padding: 20px 24px; }
@@ -707,6 +716,7 @@ function switchTab(btn) {
 let allModels = [];
 let changes = {};
 let activeTags = new Set();
+let collapseState = {}; // group key ('l1:llm', 'l2:llm/qwen') → collapsed bool
 
 function modelKey(m) { return m.repo_id + '||' + m.filename; }
 
@@ -737,9 +747,13 @@ function toggleTag(tag, btn) {
 function applyFilters() {
   const q = document.getElementById('search').value.toLowerCase().trim();
   const onlyDl = document.getElementById('only-downloaded').checked;
-  const rows = document.getElementById('models-body').querySelectorAll('tr');
+  const tbody = document.getElementById('models-body');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
   let visible = 0;
+
+  // Step 1: mark each model row (has data-idx) with data-fpass
   rows.forEach(row => {
+    if (row.dataset.idx === undefined || row.classList.contains('edit-row')) return;
     const m = allModels[parseInt(row.dataset.idx)];
     if (!m) return;
     let show = true;
@@ -749,9 +763,38 @@ function applyFilters() {
       const mt = new Set(m.tags || []);
       for (const t of activeTags) { if (!mt.has(t)) { show = false; break; } }
     }
-    row.style.display = show ? '' : 'none';
+    row.dataset.fpass = show ? '1' : '0';
     if (show) visible++;
   });
+
+  // Step 2: apply visibility for model rows and group headers
+  rows.forEach(row => {
+    if (row.classList.contains('edit-row')) return;
+    const g = row.dataset.group;
+    if (g) {
+      // Group header row
+      if (g.startsWith('l1:')) {
+        const l1 = g.slice(3);
+        const hasVisible = rows.some(r => r.dataset.l1 === l1 && !r.dataset.group && r.dataset.fpass === '1');
+        row.style.display = hasVisible ? '' : 'none';
+      } else if (g.startsWith('l2:')) {
+        const l2 = g.slice(3);
+        const l1 = row.dataset.l1;
+        if (collapseState['l1:' + l1]) { row.style.display = 'none'; return; }
+        const hasVisible = rows.some(r => r.dataset.l2 === l2 && r.dataset.fpass === '1');
+        row.style.display = hasVisible ? '' : 'none';
+      }
+    } else if (row.dataset.idx !== undefined) {
+      // Model row
+      if (row.dataset.fpass === '0') { row.style.display = 'none'; return; }
+      const l1 = row.dataset.l1;
+      const l2 = row.dataset.l2;
+      const l1c = !!collapseState['l1:' + l1];
+      const l2c = l2 ? !!collapseState['l2:' + l2] : false;
+      row.style.display = (l1c || l2c) ? 'none' : '';
+    }
+  });
+
   document.getElementById('empty-msg').style.display = visible === 0 ? '' : 'none';
   document.getElementById('stats').textContent =
     `Показано: ${visible} из ${allModels.length} моделей` +
@@ -768,67 +811,178 @@ function onEnabledChange(cb, m) {
   applyFilters();
 }
 
+function renderModelRow(m, i) {
+  const key = modelKey(m);
+  const enabled = key in changes ? changes[key] : m.enabled;
+  const tr = document.createElement('tr');
+  tr.dataset.idx = i;
+  tr.dataset.fpass = '1';
+  const parts = (m.dest_dir || 'misc').split('/');
+  tr.dataset.l1 = parts[0];
+  if (parts.length > 1) tr.dataset.l2 = m.dest_dir;
+  if (!enabled) tr.classList.add('row-disabled');
+
+  const tdCb = document.createElement('td');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.className = 'enabled-cb'; cb.checked = enabled;
+  cb.onchange = () => onEnabledChange(cb, m);
+  tdCb.appendChild(cb);
+
+  const tdStatus = document.createElement('td');
+  const dot = document.createElement('span');
+  dot.className = 'status-dot ' + (m.downloaded ? 'dot-downloaded' : 'dot-notfound');
+  dot.title = m.downloaded ? 'Скачана' : 'Не скачана';
+  tdStatus.appendChild(dot);
+
+  const tdName = document.createElement('td');
+  tdName.innerHTML =
+    `<div class="cell-repo"><a href="https://huggingface.co/${escHtml(m.repo_id)}" target="_blank">${escHtml(m.repo_id)}</a>${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
+    `<div class="cell-filename">${escHtml(m.filename)}</div>`;
+
+  const tdTags = document.createElement('td');
+  tdTags.innerHTML = '<div class="tags-cell">' +
+    (m.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') + '</div>';
+
+  const tdVram = document.createElement('td');
+  tdVram.className = 'vram';
+  tdVram.textContent = m.vram_gb ? m.vram_gb + ' GB' : '—';
+
+  const tdSize = document.createElement('td');
+  tdSize.className = 'cell-size ' + (m.downloaded ? 'downloaded' : 'notfound');
+  tdSize.textContent = m.downloaded ? fmtSize(m.disk_size_bytes) : '—';
+
+  const tdDesc = document.createElement('td');
+  tdDesc.className = 'desc';
+  tdDesc.textContent = m.description || '';
+
+  const tdActions = document.createElement('td');
+  tdActions.className = 'td-actions';
+  const btnEdit = document.createElement('button');
+  btnEdit.className = 'btn-edit';
+  btnEdit.textContent = '✎';
+  btnEdit.title = 'Редактировать атрибуты';
+  btnEdit.onclick = () => modelEditToggle(m, tr, btnEdit);
+  const btnDel = document.createElement('button');
+  btnDel.className = 'btn-delete';
+  btnDel.textContent = '✕';
+  btnDel.title = m.downloaded
+    ? 'Удалить файл и убрать из models.yaml'
+    : 'Убрать из models.yaml';
+  btnDel.onclick = () => deleteModel(m);
+  tdActions.append(btnEdit, ' ', btnDel);
+
+  tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc, tdActions);
+  return tr;
+}
+
+function toggleGroup(key) {
+  collapseState[key] = !collapseState[key];
+  const collapsed = collapseState[key];
+  const tbody = document.getElementById('models-body');
+  const rows = Array.from(tbody.querySelectorAll('tr'));
+
+  // Update toggle icon on the clicked header
+  const headerRow = tbody.querySelector(`tr[data-group="${key}"]`);
+  if (headerRow) headerRow.querySelector('.group-toggle').textContent = collapsed ? '▶' : '▼';
+
+  if (key.startsWith('l1:')) {
+    const l1 = key.slice(3);
+    rows.forEach(row => {
+      if (row.dataset.group === key || row.classList.contains('edit-row')) return;
+      if (row.dataset.l1 !== l1) return;
+      if (collapsed) {
+        row.style.display = 'none';
+      } else {
+        if (row.dataset.group) {
+          // L2 header: show (L1 is open)
+          row.style.display = '';
+        } else {
+          // Model row: respect L2 collapse and filter
+          const l2 = row.dataset.l2;
+          const l2c = l2 ? !!collapseState['l2:' + l2] : false;
+          row.style.display = (l2c || row.dataset.fpass === '0') ? 'none' : '';
+        }
+      }
+    });
+  } else if (key.startsWith('l2:')) {
+    const l2 = key.slice(3);
+    rows.forEach(row => {
+      if (row.classList.contains('edit-row')) return;
+      if (row.dataset.l2 !== l2) return;
+      row.style.display = (collapsed || row.dataset.fpass === '0') ? 'none' : '';
+    });
+  }
+}
+
 function renderModels(models) {
   const tbody = document.getElementById('models-body');
   tbody.innerHTML = '';
+
+  // Build tree: l1 → { direct: [idx,...], sub: { l2: [idx,...] }, subOrder: [] }
+  const tree = {};
+  const treeOrder = [];
   models.forEach((m, i) => {
-    const key = modelKey(m);
-    const enabled = key in changes ? changes[key] : m.enabled;
-    const tr = document.createElement('tr');
-    tr.dataset.idx = i;
-    if (!enabled) tr.classList.add('row-disabled');
+    const parts = (m.dest_dir || 'misc').split('/');
+    const l1 = parts[0];
+    if (!tree[l1]) { tree[l1] = { direct: [], sub: {}, subOrder: [] }; treeOrder.push(l1); }
+    if (parts.length > 1) {
+      const l2 = m.dest_dir;
+      if (!tree[l1].sub[l2]) { tree[l1].sub[l2] = []; tree[l1].subOrder.push(l2); }
+      tree[l1].sub[l2].push(i);
+    } else {
+      tree[l1].direct.push(i);
+    }
+  });
 
-    const tdCb = document.createElement('td');
-    const cb = document.createElement('input');
-    cb.type = 'checkbox'; cb.className = 'enabled-cb'; cb.checked = enabled;
-    cb.onchange = () => onEnabledChange(cb, m);
-    tdCb.appendChild(cb);
+  treeOrder.forEach(l1 => {
+    const node = tree[l1];
+    const l1Collapsed = !!collapseState['l1:' + l1];
+    const totalCount = node.direct.length + Object.values(node.sub).reduce((a, v) => a + v.length, 0);
 
-    const tdStatus = document.createElement('td');
-    const dot = document.createElement('span');
-    dot.className = 'status-dot ' + (m.downloaded ? 'dot-downloaded' : 'dot-notfound');
-    dot.title = m.downloaded ? 'Скачана' : 'Не скачана';
-    tdStatus.appendChild(dot);
+    // L1 group header
+    const l1Tr = document.createElement('tr');
+    l1Tr.className = 'group-row-l1';
+    l1Tr.dataset.group = 'l1:' + l1;
+    const l1Td = document.createElement('td');
+    l1Td.colSpan = 8;
+    l1Td.innerHTML =
+      `<span class="group-toggle">${l1Collapsed ? '▶' : '▼'}</span>` +
+      `${escHtml(l1)}<span class="group-count">${totalCount}</span>`;
+    l1Tr.appendChild(l1Td);
+    l1Tr.onclick = () => toggleGroup('l1:' + l1);
+    tbody.appendChild(l1Tr);
 
-    const tdName = document.createElement('td');
-    tdName.innerHTML =
-      `<div class="cell-repo"><a href="https://huggingface.co/${escHtml(m.repo_id)}" target="_blank">${escHtml(m.repo_id)}</a>${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
-      `<div class="cell-filename">${escHtml(m.filename)}</div>`;
+    // L2 sub-groups
+    node.subOrder.forEach(l2 => {
+      const l2Collapsed = !!collapseState['l2:' + l2];
+      const l2Tr = document.createElement('tr');
+      l2Tr.className = 'group-row-l2';
+      l2Tr.dataset.group = 'l2:' + l2;
+      l2Tr.dataset.l1 = l1;
+      l2Tr.style.display = l1Collapsed ? 'none' : '';
+      const l2Td = document.createElement('td');
+      l2Td.colSpan = 8;
+      const l2Label = l2.split('/').slice(1).join('/');
+      l2Td.innerHTML =
+        `<span class="group-toggle">${l2Collapsed ? '▶' : '▼'}</span>` +
+        `${escHtml(l2Label)}<span class="group-count">${node.sub[l2].length}</span>`;
+      l2Tr.appendChild(l2Td);
+      l2Tr.onclick = () => toggleGroup('l2:' + l2);
+      tbody.appendChild(l2Tr);
 
-    const tdTags = document.createElement('td');
-    tdTags.innerHTML = '<div class="tags-cell">' +
-      (m.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') + '</div>';
+      node.sub[l2].forEach(idx => {
+        const mTr = renderModelRow(models[idx], idx);
+        mTr.style.display = (l1Collapsed || l2Collapsed) ? 'none' : '';
+        tbody.appendChild(mTr);
+      });
+    });
 
-    const tdVram = document.createElement('td');
-    tdVram.className = 'vram';
-    tdVram.textContent = m.vram_gb ? m.vram_gb + ' GB' : '—';
-
-    const tdSize = document.createElement('td');
-    tdSize.className = 'cell-size ' + (m.downloaded ? 'downloaded' : 'notfound');
-    tdSize.textContent = m.downloaded ? fmtSize(m.disk_size_bytes) : '—';
-
-    const tdDesc = document.createElement('td');
-    tdDesc.className = 'desc';
-    tdDesc.textContent = m.description || '';
-
-    const tdActions = document.createElement('td');
-    tdActions.className = 'td-actions';
-    const btnEdit = document.createElement('button');
-    btnEdit.className = 'btn-edit';
-    btnEdit.textContent = '✎';
-    btnEdit.title = 'Редактировать атрибуты';
-    btnEdit.onclick = () => modelEditToggle(m, tr, btnEdit);
-    const btnDel = document.createElement('button');
-    btnDel.className = 'btn-delete';
-    btnDel.textContent = '✕';
-    btnDel.title = m.downloaded
-      ? 'Удалить файл и убрать из models.yaml'
-      : 'Убрать из models.yaml';
-    btnDel.onclick = () => deleteModel(m);
-    tdActions.append(btnEdit, ' ', btnDel);
-
-    tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc, tdActions);
-    tbody.appendChild(tr);
+    // Direct (no L2) model rows
+    node.direct.forEach(idx => {
+      const mTr = renderModelRow(models[idx], idx);
+      mTr.style.display = l1Collapsed ? 'none' : '';
+      tbody.appendChild(mTr);
+    });
   });
 }
 
