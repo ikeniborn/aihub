@@ -1448,16 +1448,15 @@ function hfApplySizeFilter() {
 // ── helpers for add form pre-fill ─────────────────────────────────────────────
 
 // ── dest_dir validation ────────────────────────────────────────────────────────
+// Allowed: 1–3 segments, each [a-z0-9][a-z0-9_-]*, separated by /
+// Examples: misc  llm  llm/qwen  llm/qwen/chat
+const _DIR_RE = /^[a-z0-9][a-z0-9_-]*(?:\/[a-z0-9][a-z0-9_-]*){0,2}$/;
 
 function validateDestDir(val) {
-  if (!val || !val.trim()) return null; // empty → 'misc' applied at save level
+  if (!val || !val.trim()) return 'Обязательное поле (мин. 1 уровень, напр. misc)';
   const v = val.trim();
-  if (v.includes('\\'))           return 'Используйте / а не \\';
-  if (v.startsWith('/') || v.endsWith('/')) return 'Нельзя начинать/заканчивать на /';
-  if (v.includes('//'))           return 'Двойной // запрещён';
-  if (v.includes('..'))           return 'Путь .. запрещён';
-  if (!/^[a-z0-9_\-\/]+$/.test(v)) return 'Допустимы: a-z 0-9 _ - /';
-  if (v.split('/').length > 3)    return 'Максимум 3 уровня (пример: llm/qwen/chat)';
+  if (!_DIR_RE.test(v))
+    return 'Формат: a-z/0-9/_/- · от 1 до 3 уровней через /  (напр. llm  llm/qwen  llm/qwen/chat)';
   return null;
 }
 
