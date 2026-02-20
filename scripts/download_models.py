@@ -35,6 +35,7 @@ from typing import Optional
 
 import yaml
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 
 # ─── Data Classes ─────────────────────────────────────────────────────────────
@@ -477,7 +478,7 @@ def main() -> int:
 
     results: list[DownloadResult] = []
 
-    for model in candidates:
+    for model in tqdm(candidates, desc="Models", unit="model", leave=True):
         repo_label = f"{model.repo_id}/{model.filename}"
         print(f"[{model.repo_id.split('/')[-1]}]")
 
