@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -231,7 +232,38 @@ HTML_PAGE = r"""<!DOCTYPE html>
     white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
   }
   .btn-delete:hover { opacity: 1; background: #450a0a; }
-  td.td-actions { width: 60px; text-align: center; }
+  .btn-edit {
+    background: none; border: 1px solid #1e3a5f; border-radius: 4px;
+    color: #7dd3fc; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    opacity: 0.55; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-edit:hover { opacity: 1; background: #0c1e33; }
+  .btn-edit.active { opacity: 1; background: #0f2d47; border-color: #3b82f6; }
+  .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
+  td.td-actions { width: 72px; text-align: center; white-space: nowrap; }
+  /* ── Inline model edit row ── */
+  .edit-row > td {
+    padding: 0; background: #0a1120;
+    border-left: 3px solid var(--accent); border-bottom: 2px solid var(--accent);
+  }
+  .model-edit-form {
+    display: flex; flex-wrap: wrap; gap: 10px 14px;
+    padding: 14px 18px; align-items: flex-end;
+  }
+  .model-edit-field { display: flex; flex-direction: column; gap: 3px; }
+  .model-edit-field label { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+  .model-edit-input {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-primary); padding: 4px 8px; font-size: 0.8rem;
+    outline: none; transition: border-color 0.15s;
+  }
+  .model-edit-input:focus { border-color: var(--accent); }
+  .model-edit-input.w-tags  { width: 200px; }
+  .model-edit-input.w-vram  { width: 70px; }
+  .model-edit-input.w-desc  { width: 260px; }
+  .model-edit-input.w-dir   { width: 150px; }
+  .dir-move-note { font-size: 0.68rem; color: var(--yellow); margin-top: 2px; }
+  .model-edit-actions { display: flex; gap: 8px; align-items: center; padding-bottom: 1px; }
 
   /* ── HF Search panel ── */
   .hf-panel { padding: 20px 24px; }
@@ -781,6 +813,11 @@ function renderModels(models) {
 
     const tdActions = document.createElement('td');
     tdActions.className = 'td-actions';
+    const btnEdit = document.createElement('button');
+    btnEdit.className = 'btn-edit';
+    btnEdit.textContent = '✎';
+    btnEdit.title = 'Редактировать атрибуты';
+    btnEdit.onclick = () => modelEditToggle(m, tr, btnEdit);
     const btnDel = document.createElement('button');
     btnDel.className = 'btn-delete';
     btnDel.textContent = '✕';
@@ -788,11 +825,125 @@ function renderModels(models) {
       ? 'Удалить файл и убрать из models.yaml'
       : 'Убрать из models.yaml';
     btnDel.onclick = () => deleteModel(m);
-    tdActions.appendChild(btnDel);
+    tdActions.append(btnEdit, ' ', btnDel);
 
     tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc, tdActions);
     tbody.appendChild(tr);
   });
+}
+
+// ── Inline model editing ───────────────────────────────────────────────────────
+
+function modelEditToggle(m, mainTr, btn) {
+  const existingEdit = mainTr.nextElementSibling;
+  if (existingEdit && existingEdit.classList.contains('edit-row')) {
+    existingEdit.remove();
+    btn.classList.remove('active');
+    return;
+  }
+  // Close any other open edit rows
+  document.querySelectorAll('.edit-row').forEach(r => r.remove());
+  document.querySelectorAll('.btn-edit.active').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+
+  const editTr = document.createElement('tr');
+  editTr.className = 'edit-row';
+
+  const td = document.createElement('td');
+  td.colSpan = 8;
+
+  const form = document.createElement('div');
+  form.className = 'model-edit-form';
+
+  // Tags
+  form.appendChild(_editField('Теги (через пробел)', 'tags', 'text', (m.tags || []).join(' '), 'w-tags'));
+  // VRAM
+  form.appendChild(_editField('VRAM (GB)', 'vram', 'number', m.vram_gb || 0, 'w-vram'));
+  // Description
+  form.appendChild(_editField('Описание', 'desc', 'text', m.description || '', 'w-desc'));
+  // dest_dir
+  const dirWrap = _editField('Папка (dest_dir)', 'dir', 'text', m.dest_dir || 'misc', 'w-dir');
+  if (m.downloaded) {
+    const note = document.createElement('div');
+    note.className = 'dir-move-note';
+    note.textContent = '⚠ файл будет перемещён при изменении';
+    dirWrap.appendChild(note);
+  }
+  form.appendChild(dirWrap);
+  // Gated
+  const gatedWrap = document.createElement('div');
+  gatedWrap.className = 'model-edit-field';
+  const gatedLbl = document.createElement('label');
+  gatedLbl.textContent = 'Gated (требует токен)';
+  const gatedCb = document.createElement('input');
+  gatedCb.type = 'checkbox'; gatedCb.className = 'enabled-cb'; gatedCb.dataset.field = 'gated';
+  gatedCb.checked = !!m.gated;
+  gatedWrap.append(gatedLbl, gatedCb);
+  form.appendChild(gatedWrap);
+
+  // Actions
+  const actWrap = document.createElement('div');
+  actWrap.className = 'model-edit-actions';
+  const btnSave = document.createElement('button');
+  btnSave.className = 'btn-primary btn-sm'; btnSave.textContent = 'Сохранить';
+  btnSave.onclick = () => modelEditSave(m, editTr, mainTr, btn);
+  const btnCancel = document.createElement('button');
+  btnCancel.className = 'btn-secondary btn-sm'; btnCancel.textContent = 'Отмена';
+  btnCancel.onclick = () => { editTr.remove(); btn.classList.remove('active'); };
+  const statusEl = document.createElement('span');
+  statusEl.className = 'status-msg'; statusEl.dataset.role = 'edit-status';
+  actWrap.append(btnSave, btnCancel, statusEl);
+  form.appendChild(actWrap);
+
+  td.appendChild(form);
+  editTr.appendChild(td);
+  mainTr.insertAdjacentElement('afterend', editTr);
+  form.querySelector('input').focus();
+}
+
+function _editField(label, fieldName, type, value, widthCls) {
+  const wrap = document.createElement('div');
+  wrap.className = 'model-edit-field';
+  const lbl = document.createElement('label'); lbl.textContent = label;
+  const inp = document.createElement('input');
+  inp.type = type; inp.value = value;
+  inp.className = 'model-edit-input ' + widthCls;
+  inp.dataset.field = fieldName;
+  wrap.append(lbl, inp);
+  return wrap;
+}
+
+async function modelEditSave(m, editTr, mainTr, btn) {
+  const update = { repo_id: m.repo_id, filename: m.filename };
+  editTr.querySelectorAll('input[data-field]').forEach(inp => {
+    const f = inp.dataset.field;
+    if (f === 'tags')  update.tags = inp.value.trim() ? inp.value.trim().split(/\s+/) : [];
+    if (f === 'vram')  update.vram_gb = parseFloat(inp.value) || 0;
+    if (f === 'desc')  update.description = inp.value.trim();
+    if (f === 'dir')   update.dest_dir = inp.value.trim() || 'misc';
+    if (f === 'gated') update.gated = inp.checked;
+  });
+
+  const statusEl = editTr.querySelector('[data-role=edit-status]');
+  const btnSave = editTr.querySelector('.btn-primary');
+  btnSave.disabled = true;
+  statusEl.className = 'status-msg'; statusEl.textContent = 'Сохранение…';
+
+  try {
+    const resp = await fetch('/api/save', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ updates: [update] }),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.error || 'HTTP ' + resp.status);
+    editTr.remove();
+    btn.classList.remove('active');
+    loadModels();
+  } catch (e) {
+    statusEl.className = 'status-msg err';
+    statusEl.textContent = 'Ошибка: ' + e.message;
+    btnSave.disabled = false;
+  }
 }
 
 async function deleteModel(m) {
@@ -1515,23 +1666,63 @@ def get_models_json(config_path: Path) -> list[dict]:
 
 def save_models(config_path: Path, updates: list[dict]) -> None:
     """
-    Atomically update 'enabled' field in models.yaml for given models.
+    Atomically update model entries in models.yaml.
 
-    Updates is a list of {repo_id, filename, enabled} dicts.
-    Uses tempfile + os.replace() for POSIX atomic write.
+    Each update dict must contain repo_id + filename as identifiers and may
+    contain any combination of: enabled, tags, vram_gb, description, gated, dest_dir.
+
+    If dest_dir changes and the model file exists at the old path, it is moved
+    to the new path (parent dirs created automatically).
     """
     raw = load_yaml(config_path)
-    update_map = {
-        (u["repo_id"], u["filename"]): bool(u["enabled"])
+    settings: dict = raw.get("settings", {})
+    models_dir = Path(settings.get("models_dir", "./models"))
+    if not models_dir.is_absolute():
+        models_dir = config_path.parent / models_dir
+
+    update_map: dict[tuple[str, str], dict] = {
+        (str(u.get("repo_id", "")), str(u.get("filename", ""))): u
         for u in updates
+        if u.get("repo_id") and u.get("filename")
     }
 
     for item in raw.get("models", []) or []:
         if not isinstance(item, dict):
             continue
         key = (item.get("repo_id", ""), item.get("filename", ""))
-        if key in update_map:
-            item["enabled"] = update_map[key]
+        if key not in update_map:
+            continue
+        u = update_map[key]
+
+        # dest_dir change → move file if it exists
+        if "dest_dir" in u:
+            new_dir = str(u["dest_dir"]).strip() or "misc"
+            old_dir = str(item.get("dest_dir", "misc"))
+            if old_dir != new_dir:
+                old_path = models_dir / old_dir / item["filename"]
+                new_path = models_dir / new_dir / item["filename"]
+                if old_path.is_file():
+                    new_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(old_path), str(new_path))
+            item["dest_dir"] = new_dir
+
+        if "enabled" in u:
+            item["enabled"] = bool(u["enabled"])
+        if "gated" in u:
+            item["gated"] = bool(u["gated"])
+        if "vram_gb" in u:
+            try:
+                item["vram_gb"] = float(u["vram_gb"])
+            except (ValueError, TypeError):
+                pass
+        if "description" in u:
+            item["description"] = str(u.get("description") or "")
+        if "tags" in u:
+            raw_tags = u["tags"]
+            if isinstance(raw_tags, list):
+                item["tags"] = [str(t) for t in raw_tags if t]
+            elif isinstance(raw_tags, str):
+                item["tags"] = [t for t in raw_tags.split() if t]
 
     _atomic_yaml_write(config_path, raw)
 
