@@ -1,0 +1,182 @@
+# AI Model Download List
+# ========================
+# Edit this file to control which models are downloaded.
+#
+# Per-model fields:
+#   repo_id    (required) HuggingFace repository ID
+#   filename   (required) exact filename to download (usually *.gguf)
+#   dest_dir   (optional) subdirectory inside models/ (default: category slug)
+#   enabled    (optional) set false to skip without removing the entry (default: true)
+#   gated      (optional) true = requires HF_TOKEN + license acceptance (default: false)
+#   tags       (optional) list of labels for --filter-tag flag
+#   vram_gb    (optional) minimum VRAM required (informational)
+#   description (optional) human-readable label
+#
+# Global settings control defaults for all models.
+# Run: python scripts/download_models.py --help
+
+settings:
+  models_dir: ./models
+  default_quant: Q4_K_M
+  # update_policy options:
+  #   skip   — never re-download if file exists (fastest, ignores upstream changes)
+  #   etag   — re-download only if server ETag differs (recommended)
+  #   always — always re-download (use with --force flag instead)
+  update_policy: etag
+
+models:
+
+  # ────────────────────────────────────────────────────────────
+  # LLM: Универсальные текстовые / чат модели
+  # ────────────────────────────────────────────────────────────
+
+  - repo_id: bartowski/Llama-3.1-8B-Instruct-GGUF
+    filename: Llama-3.1-8B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/llama
+    enabled: true
+    gated: false
+    tags: [llm, chat, english, 8b]
+    vram_gb: 5
+    description: "Llama 3.1 8B Instruct Q4_K_M — Meta, Llama Community License"
+
+  - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
+    filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/qwen
+    enabled: true
+    gated: false
+    tags: [llm, chat, multilingual, russian, 14b]
+    vram_gb: 9
+    description: "Qwen 2.5 14B Instruct Q4_K_M — Alibaba, Apache 2.0"
+
+  - repo_id: bartowski/Qwen2.5-32B-Instruct-GGUF
+    filename: Qwen2.5-32B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/qwen
+    enabled: false  # Requires 20 GB VRAM — enable if you have RTX 4090
+    gated: false
+    tags: [llm, chat, multilingual, russian, 32b]
+    vram_gb: 20
+    description: "Qwen 2.5 32B Instruct Q4_K_M — Alibaba, Apache 2.0"
+
+  - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
+    dest_dir: llm/deepseek
+    enabled: true
+    gated: false
+    tags: [llm, reasoning, 14b]
+    vram_gb: 10
+    description: "DeepSeek R1 Distill Qwen 14B Q4_K_M — reasoning model, MIT code / DeepSeek weights"
+
+  - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF
+    filename: DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf
+    dest_dir: llm/deepseek
+    enabled: false  # Requires 20 GB VRAM — enable if you have RTX 4090
+    gated: false
+    tags: [llm, reasoning, 32b]
+    vram_gb: 20
+    description: "DeepSeek R1 Distill Qwen 32B Q4_K_M — near o1-mini quality, MIT code / DeepSeek weights"
+
+  - repo_id: bartowski/Phi-4-GGUF
+    filename: Phi-4-Q4_K_M.gguf
+    dest_dir: llm/phi
+    enabled: true
+    gated: false
+    tags: [llm, reasoning, code, 14b]
+    vram_gb: 8
+    description: "Phi-4 14B Q4_K_M — Microsoft, MIT license; strong reasoning and code"
+
+  # ────────────────────────────────────────────────────────────
+  # LLM: Русскоязычные модели
+  # ────────────────────────────────────────────────────────────
+
+  - repo_id: IlyaGusev/saiga_llama3_8b_gguf
+    filename: model-q4_k.gguf
+    dest_dir: llm/russian
+    enabled: true
+    gated: false
+    tags: [llm, chat, russian, 8b]
+    vram_gb: 5
+    description: "Saiga Llama3 8B Q4_K — IlyaGusev, Apache 2.0; popular Russian-language assistant"
+
+  - repo_id: QuantFactory/T-lite-01-gguf
+    filename: T-lite-01.Q4_K_M.gguf
+    dest_dir: llm/russian
+    enabled: true
+    gated: false
+    tags: [llm, chat, russian, 7b]
+    vram_gb: 5
+    description: "T-Lite 7B Q4_K_M — T-Bank (Tinkoff), Apache 2.0; #1 open Russian model on MERA"
+
+  - repo_id: ai-sage/GigaChat3-10B-A1.8B-GGUF
+    filename: GigaChat3-10B-A1.8B-Q4_K_M.gguf
+    dest_dir: llm/russian
+    enabled: false  # Verify filename on HuggingFace before enabling
+    gated: false
+    tags: [llm, chat, russian, moe, 10b]
+    vram_gb: 4
+    description: "GigaChat3 10B MoE (1.8B active) — Sber, MIT; speed of 3-4B dense model"
+
+  # ────────────────────────────────────────────────────────────
+  # LLM: Модели для кода
+  # ────────────────────────────────────────────────────────────
+
+  - repo_id: Qwen/Qwen2.5-Coder-32B-Instruct-GGUF
+    filename: qwen2.5-coder-32b-instruct-q4_k_m.gguf
+    dest_dir: llm/code
+    enabled: false  # Requires 20 GB VRAM — enable if you have RTX 4090
+    gated: false
+    tags: [llm, code, 32b]
+    vram_gb: 20
+    description: "Qwen2.5-Coder 32B Q4_K_M — Alibaba, Apache 2.0; 92+ programming languages"
+
+  - repo_id: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
+    filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/code
+    enabled: true
+    gated: false
+    tags: [llm, code, 14b]
+    vram_gb: 9
+    description: "Qwen2.5-Coder 14B Q4_K_M — Alibaba, Apache 2.0; excellent code generation"
+
+  # ────────────────────────────────────────────────────────────
+  # Embeddings для RAG
+  # ────────────────────────────────────────────────────────────
+
+  - repo_id: gpustack/bge-m3-GGUF
+    filename: bge-m3-Q8_0.gguf
+    dest_dir: embeddings
+    enabled: true
+    gated: false
+    tags: [embeddings, multilingual, russian, rag]
+    vram_gb: 1
+    description: "BGE-M3 Q8_0 — BAAI; 100+ languages, 8192 token context, dense+sparse+colbert"
+
+  - repo_id: nomic-ai/nomic-embed-text-v1.5-GGUF
+    filename: nomic-embed-text-v1.5.Q8_0.gguf
+    dest_dir: embeddings
+    enabled: true
+    gated: false
+    tags: [embeddings, english, rag]
+    vram_gb: 0
+    description: "Nomic Embed Text v1.5 Q8_0 — Nomic AI, Apache 2.0; 137M params, Matryoshka"
+
+  # ────────────────────────────────────────────────────────────
+  # Генерация изображений
+  # ────────────────────────────────────────────────────────────
+
+  - repo_id: black-forest-labs/FLUX.1-schnell
+    filename: flux1-schnell.safetensors
+    dest_dir: image_gen/flux
+    enabled: false  # ~23 GB — enable if you need image generation; needs ComfyUI
+    gated: false
+    tags: [image_gen, flux, apache2]
+    vram_gb: 8
+    description: "FLUX.1 schnell — Black Forest Labs, Apache 2.0; 1-4 steps, commercial use OK"
+
+  - repo_id: stabilityai/stable-diffusion-xl-base-1.0
+    filename: sd_xl_base_1.0.safetensors
+    dest_dir: image_gen/sdxl
+    enabled: false  # ~6.9 GB — enable if you need SDXL image generation
+    gated: false
+    tags: [image_gen, sdxl]
+    vram_gb: 8
+    description: "SDXL Base 1.0 — Stability AI, SDXL Community License"
