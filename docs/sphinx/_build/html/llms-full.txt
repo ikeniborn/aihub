@@ -1,0 +1,1708 @@
+---
+title: aihub Documentation
+---
+
+# aihub
+
+Инструменты для загрузки открытых AI-моделей на локальный диск и синхронизации в S3-хранилище.
+
+```{toctree}
+:maxdepth: 2
+:caption: Documentation
+
+../../README
+../GUIDES
+```
+
+```{toctree}
+:maxdepth: 2
+:caption: Architecture
+
+../architecture/diagrams/dependency-graph
+../architecture/diagrams/data-flow-download
+```
+
+```{toctree}
+:maxdepth: 1
+:caption: Reference
+
+../compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown
+```
+
+---
+
+:::{note}
+**For AI agents:** This documentation generates `llms.txt` and `llms-full.txt` at build time.
+Use them for efficient navigation: `docs/sphinx/_build/html/llms.txt`
+:::
+
+
+# aihub
+
+Инструменты для загрузки открытых AI-моделей на локальный диск и синхронизации в S3-хранилище.
+
+Подробное руководство: [docs/GUIDES.md](docs/GUIDES.md)
+
+---
+
+## Требования
+
+- Python 3.9+
+- `make setup` — создаёт `.venv` и устанавливает все зависимости автоматически
+
+> Альтернатива без make: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+
+---
+
+## Быстрый старт
+
+```bash
+make setup                                      # создать .venv и установить зависимости
+cp credentials.yaml.example credentials.yaml   # добавить токены
+cp .env.example .env                            # добавить S3-параметры
+make list                                       # показать список моделей
+make download                                   # загрузка всех включённых моделей
+```
+
+---
+
+## Конфигурация
+
+### Секреты → `credentials.yaml` (gitignored)
+
+```yaml
+huggingface:
+  token: "hf_..."          # для закрытых моделей (Llama, Gemma)
+s3:
+  access_key_id: "..."
+  secret_access_key: "..."
+```
+
+### Параметры → `.env` (gitignored)
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1   # ускоренные загрузки
+S3_BUCKET=my-bucket
+S3_REGION=us-east-1
+S3_PREFIX=models
+S3_ENDPOINT_URL=               # пусто для AWS; для Yandex/MinIO — endpoint URL
+```
+
+Приоритет: `credentials.yaml` → `.env` → переменные окружения.
+
+---
+
+## Скрипты
+
+### `download_models.py` — загрузка моделей
+
+```
+--list                  показать список моделей
+--dry-run               проверить без загрузки
+--model SUBSTRING       фильтр по имени модели
+--tag TAG               фильтр по тегу
+--force                 перезагрузить даже если файл есть
+--include-disabled      включить отключённые модели
+--upload-s3             загрузить в S3 после скачивания
+--s3-only               только S3 (без постоянного хранения на диске)
+--retries N             количество повторов (default: 3)
+--retry-delay SECS      базовая задержка между повторами (default: 5s)
+--delay SECS            пауза между моделями (default: 0)
+--config FILE           путь к models.yaml
+--creds FILE            путь к credentials.yaml
+```
+
+HTTP 429 (rate limit) обрабатывается автоматически: задержка ×10 от базовой.
+
+### `browse_models.py` — поиск на HuggingFace Hub
+
+```
+--query TEXT            полнотекстовый поиск
+--author NAME           фильтр по автору
+--tags TAG ...          фильтр по тегам
+--regex PATTERN         regex по model_id
+--file-regex PATTERN    regex по именам файлов внутри репо
+--show-files            показать файлы каждого репо
+--yaml                  вывод YAML-фрагмента для models.yaml
+--sort downloads|likes|lastModified
+--limit N               макс. результатов (default: 20)
+```
+
+### `model_browser.py` — веб-интерфейс
+
+```bash
+python scripts/model_browser.py            # http://localhost:9000
+python scripts/model_browser.py --port 8080 --host 0.0.0.0
+```
+
+Просмотр и управление моделями в браузере. Показывает размер файла на диске, фильтрация по тексту/тегам, чекбоксы `enabled`, сохранение в `models.yaml`.
+
+---
+
+## `models.yaml` — список моделей
+
+```yaml
+settings:
+  models_dir: ./models
+  update_policy: etag        # etag | skip | always
+  retry_count: 3
+  retry_delay: 5.0
+  inter_download_delay: 0
+
+models:
+  - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
+    filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/qwen
+    enabled: true
+    gated: false
+    tags: [llm, chat, russian, 14b]
+    vram_gb: 9
+    description: "Qwen 2.5 14B — Alibaba, Apache 2.0"
+```
+
+---
+
+## Структура
+
+```
+aihub/
+├── models.yaml                  # список моделей
+├── requirements.txt             # зависимости (для совместимости с CI/CD)
+├── pyproject.toml               # конфигурация проекта (PEP 517, uv-совместимый)
+├── Makefile                     # команды: setup, download, browse, ui, list, update
+├── .python-version              # версия Python (3.9)
+├── credentials.yaml.example     # шаблон секретов
+├── .env.example                 # шаблон параметров
+├── scripts/
+│   ├── utils.py                 # общие утилиты (fmt_size, load_hf_token)
+│   ├── download_models.py       # загрузка моделей → локально / S3
+│   ├── browse_models.py         # поиск на HuggingFace Hub
+│   └── model_browser.py         # веб-интерфейс (порт 9000)
+├── docs/
+│   └── GUIDES.md                # пошаговое руководство пользователя
+├── .venv/                       # виртуальное окружение (gitignored, создаётся make setup)
+└── models/                      # скачанные модели (gitignored)
+```
+
+---
+
+## Безопасность
+
+| Файл | git | Содержимое |
+|------|-----|-----------|
+| `credentials.yaml` | **ignored** | токены, ключи — никогда не коммитить |
+| `.env` | **ignored** | параметры конфигурации |
+| `models/` | **ignored** | бинарные веса моделей |
+| `*.etag` | **ignored** | файлы состояния загрузки |
+
+
+# Руководство пользователя aihub
+
+## Содержание
+
+1. [Первоначальная настройка](#1-первоначальная-настройка)
+2. [Загрузка моделей](#2-загрузка-моделей)
+3. [Управление списком через веб-интерфейс](#3-управление-списком-через-веб-интерфейс)
+4. [Поиск новых моделей](#4-поиск-новых-моделей)
+5. [Синхронизация в S3](#5-синхронизация-в-s3)
+6. [Обновление моделей](#6-обновление-моделей)
+7. [Работа в CI/CD](#7-работа-в-cicd)
+8. [Типовые сценарии](#8-типовые-сценарии)
+
+---
+
+## 1. Первоначальная настройка
+
+### Шаг 1 — установить зависимости
+
+```bash
+make setup
+```
+
+Команда создаёт изолированное виртуальное окружение `.venv` и устанавливает все зависимости автоматически. Повторный запуск `make setup` безопасен.
+
+> Альтернатива без make: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+
+### Шаг 2 — создать файл секретов
+
+```bash
+cp credentials.yaml.example credentials.yaml
+```
+
+Открыть `credentials.yaml` и заполнить:
+
+```yaml
+huggingface:
+  token: ""        # оставить пустым, если не нужны закрытые модели
+
+s3:
+  access_key_id: ""
+  secret_access_key: ""
+```
+
+Токен HuggingFace нужен только для моделей с `gated: true` (Llama, Gemma и др.).
+Получить токен: <https://huggingface.co/settings/tokens>
+
+### Шаг 3 — создать файл параметров
+
+```bash
+cp .env.example .env
+```
+
+Минимальная конфигурация для локального использования без S3:
+
+```bash
+HF_HUB_ENABLE_HF_TRANSFER=1   # ускоренные загрузки (рекомендуется)
+```
+
+### Шаг 4 — проверить конфигурацию
+
+```bash
+python scripts/download_models.py --list
+```
+
+Должна вывестись таблица моделей из `models.yaml`. Если вывод появился — настройка выполнена корректно.
+
+---
+
+## 2. Загрузка моделей
+
+### Просмотр доступных моделей
+
+```bash
+python scripts/download_models.py --list
+```
+
+Колонки: `STATUS` (enabled/disabled), `REPO_ID / FILENAME`, `TAGS`, `VRAM`, `DESCRIPTION`.
+
+### Проверка без загрузки
+
+```bash
+python scripts/download_models.py --dry-run
+```
+
+Скрипт проверяет доступность репозиториев на HuggingFace без скачивания файлов. Выводит те же статусы, что и при реальной загрузке.
+
+### Загрузить все включённые модели
+
+```bash
+python scripts/download_models.py
+```
+
+Модели сохраняются в `./models/{dest_dir}/{filename}`.
+Уже скачанные файлы с актуальным ETag **пропускаются автоматически**.
+
+### Загрузить конкретную модель
+
+```bash
+# по подстроке в repo_id или filename
+python scripts/download_models.py --model Phi-4
+python scripts/download_models.py --model Qwen2.5-14B
+python scripts/download_models.py --model bge-m3
+```
+
+### Загрузить модели по категории
+
+```bash
+python scripts/download_models.py --tag russian       # русскоязычные
+python scripts/download_models.py --tag embeddings    # эмбеддинги для RAG
+python scripts/download_models.py --tag reasoning     # reasoning-модели
+python scripts/download_models.py --tag code          # модели для кода
+```
+
+### Включить отключённые модели
+
+Модели с `enabled: false` в `models.yaml` пропускаются по умолчанию.
+Чтобы загрузить конкретную отключённую модель:
+
+```bash
+python scripts/download_models.py --include-disabled --model Qwen2.5-32B
+```
+
+### Принудительная перезагрузка
+
+```bash
+# перезагрузить все модели, игнорируя ETag
+python scripts/download_models.py --force
+
+# перезагрузить одну модель
+python scripts/download_models.py --force --model DeepSeek-R1
+```
+
+---
+
+## 3. Управление списком через веб-интерфейс
+
+### Запуск
+
+```bash
+python scripts/model_browser.py
+```
+
+Открыть в браузере: <http://localhost:9000>
+
+Для доступа с другого хоста в локальной сети:
+
+```bash
+python scripts/model_browser.py --host 0.0.0.0 --port 9000
+```
+
+### Что можно сделать в интерфейсе
+
+**Просмотр:**
+- Таблица всех моделей из `models.yaml`
+- Зелёная точка — файл скачан, серая — не скачан
+- Тусклая строка — модель отключена (`enabled: false`)
+- Реальный размер файла на диске
+
+**Фильтрация:**
+- Поле поиска — substring по `repo_id`, `filename`, `description`
+- Кнопки-теги — фильтр по категориям
+- Переключатель «только скачанные»
+
+**Редактирование:**
+1. Поставить или снять чекбокс `enabled` у нужных моделей
+2. Нажать **Сохранить** — `models.yaml` обновится атомарно
+
+### Добавить другой конфиг
+
+```bash
+python scripts/model_browser.py --config /path/to/custom.yaml
+```
+
+---
+
+## 4. Поиск новых моделей
+
+### Поиск по ключевому слову
+
+```bash
+python scripts/browse_models.py --query "llama"
+python scripts/browse_models.py --query "embedding russian"
+```
+
+### Поиск по автору
+
+```bash
+python scripts/browse_models.py --author bartowski
+python scripts/browse_models.py --author unsloth
+python scripts/browse_models.py --author Qwen
+```
+
+### Поиск с regex-фильтром по имени модели
+
+```bash
+# только модели с 14B в названии
+python scripts/browse_models.py --author bartowski --regex ".*14B.*"
+
+# только Q4_K_M квантизации
+python scripts/browse_models.py --query "instruct" --regex ".*Q4_K_M.*"
+```
+
+### Просмотр файлов в репозитории
+
+```bash
+# показать все файлы репозиториев
+python scripts/browse_models.py --author bartowski --show-files
+
+# только gguf-файлы с regex-фильтром
+python scripts/browse_models.py --author bartowski --file-regex "Q4_K_M\.gguf$"
+```
+
+### Получить YAML для вставки в models.yaml
+
+```bash
+# найти и сформировать записи
+python scripts/browse_models.py \
+  --author bartowski \
+  --file-regex "Q4_K_M\.gguf$" \
+  --yaml
+```
+
+Вывод скопировать в раздел `models:` файла `models.yaml`.
+После вставки заполнить поля `dest_dir`, `tags`, `vram_gb`, `description` и поставить `enabled: true`.
+
+### Пример полного цикла: найти → добавить → загрузить
+
+```bash
+# 1. найти модель
+python scripts/browse_models.py --query "mistral" --file-regex "Q4_K_M\.gguf$" --yaml
+
+# 2. скопировать нужную запись в models.yaml, заполнить поля
+
+# 3. проверить
+python scripts/download_models.py --dry-run --model mistral
+
+# 4. загрузить
+python scripts/download_models.py --model mistral
+```
+
+---
+
+## 5. Синхронизация в S3
+
+### Предварительная настройка
+
+В `credentials.yaml` заполнить секции `s3`:
+
+```yaml
+s3:
+  access_key_id: "AKIAXXXXXXXXXXXXXXXX"
+  secret_access_key: "ваш_секрет"
+```
+
+В `.env` указать параметры:
+
+```bash
+S3_BUCKET=my-ai-models
+S3_REGION=us-east-1
+S3_PREFIX=models
+
+# для Yandex Object Storage:
+S3_ENDPOINT_URL=https://storage.yandexcloud.net
+S3_REGION=ru-central1
+
+# для MinIO:
+S3_ENDPOINT_URL=http://localhost:9000
+S3_REGION=us-east-1
+```
+
+### Загрузить локально и отправить в S3
+
+```bash
+python scripts/download_models.py --upload-s3
+```
+
+Модели сохраняются на диск **и** копируются в S3.
+Повторный запуск пропускает объекты, уже присутствующие в S3 с совпадающим размером.
+
+### Только в S3 (без постоянного хранения на диске)
+
+```bash
+python scripts/download_models.py --s3-only
+```
+
+Файлы скачиваются во временную директорию, загружаются в S3, затем удаляются.
+Временная директория удаляется автоматически даже при прерывании (`Ctrl+C`).
+
+### Выборочная синхронизация в S3
+
+```bash
+# только русскоязычные модели
+python scripts/download_models.py --upload-s3 --tag russian
+
+# принудительно перезалить embeddings
+python scripts/download_models.py --upload-s3 --tag embeddings --force
+```
+
+### Структура ключей в S3
+
+```
+{S3_PREFIX}/{dest_dir}/{filename}
+
+Примеры:
+  models/llm/qwen/Qwen2.5-14B-Instruct-Q4_K_M.gguf
+  models/embeddings/bge-m3-Q8_0.gguf
+  models/llm/russian/model-q4_k.gguf
+```
+
+---
+
+## 6. Обновление моделей
+
+### Политики обновления
+
+В `models.yaml`:
+
+```yaml
+settings:
+  update_policy: etag   # рекомендуется
+```
+
+| Политика | Поведение |
+|----------|-----------|
+| `etag`   | При каждом запуске сравнивает ETag через HTTP HEAD. Перекачивает только если файл изменился на сервере |
+| `skip`   | Никогда не перекачивает, если файл есть. Подходит если обновления не нужны |
+| `always` | Всегда перекачивает. Эквивалентно флагу `--force` |
+
+### Проверить и обновить все модели
+
+```bash
+# etag-политика (default) — скачает только изменившиеся
+python scripts/download_models.py
+
+# принудительно обновить всё
+python scripts/download_models.py --force
+```
+
+### Настройка задержек
+
+```bash
+# пауза 2 секунды между моделями, 5 повторов, 10 секунд базовая задержка
+python scripts/download_models.py --delay 2 --retries 5 --retry-delay 10
+```
+
+Или в `models.yaml`:
+
+```yaml
+settings:
+  retry_count: 3
+  retry_delay: 5.0
+  inter_download_delay: 30   # секунд между моделями
+```
+
+При HTTP 429 (rate limit) скрипт автоматически ждёт `retry_delay × 10` секунд перед повтором.
+
+---
+
+## 7. Работа в CI/CD
+
+В CI/CD окружении файл `credentials.yaml` обычно недоступен — использовать переменные окружения.
+
+### Переменные окружения для CI
+
+```bash
+# секреты
+HF_TOKEN=hf_...
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+
+# параметры
+S3_BUCKET=my-ai-models
+S3_REGION=us-east-1
+S3_PREFIX=models
+S3_ENDPOINT_URL=
+HF_HUB_ENABLE_HF_TRANSFER=1
+```
+
+### Пример pipeline (GitHub Actions / GitLab CI)
+
+```bash
+# установка
+pip install -r requirements.txt
+
+# только S3 — не занимать место на раннере
+python scripts/download_models.py --s3-only
+
+# или: загрузить артефакты для следующего шага
+python scripts/download_models.py --tag embeddings
+```
+
+### Использовать альтернативный файл кредов
+
+```bash
+python scripts/download_models.py --creds /secrets/prod-credentials.yaml
+```
+
+---
+
+## 8. Типовые сценарии
+
+### Первая загрузка всего набора
+
+```bash
+pip install -r requirements.txt
+cp credentials.yaml.example credentials.yaml
+# заполнить credentials.yaml
+cp .env.example .env
+# заполнить .env (HF_HUB_ENABLE_HF_TRANSFER=1)
+
+python scripts/download_models.py --dry-run   # убедиться что всё ок
+python scripts/download_models.py             # загрузить
+```
+
+### Добавить новую модель вручную
+
+1. Найти модель на <https://huggingface.co>
+2. Скопировать `repo_id` (например, `bartowski/Phi-4-GGUF`) и точное имя файла
+3. Добавить запись в `models.yaml`:
+
+```yaml
+  - repo_id: bartowski/Phi-4-GGUF
+    filename: Phi-4-Q4_K_M.gguf
+    dest_dir: llm/phi
+    enabled: true
+    gated: false
+    tags: [llm, reasoning, code, 14b]
+    vram_gb: 8
+    description: "Phi-4 14B — Microsoft, MIT"
+```
+
+4. Загрузить:
+
+```bash
+python scripts/download_models.py --model Phi-4
+```
+
+### Управлять набором через браузер
+
+```bash
+python scripts/model_browser.py   # открыть http://localhost:9000
+# включить/отключить модели через чекбоксы → Сохранить
+python scripts/download_models.py   # загрузить новые включённые
+```
+
+### Резервное копирование в S3
+
+```bash
+# скачать и залить всё в S3
+python scripts/download_models.py --upload-s3
+
+# плановое обновление с синхронизацией
+python scripts/download_models.py --upload-s3 --delay 5
+```
+
+### Поиск и загрузка модели одной командой
+
+```bash
+# поиск → YAML → добавить в models.yaml → загрузить
+python scripts/browse_models.py \
+  --author unsloth \
+  --file-regex "Llama.*Q4_K_M\.gguf$" \
+  --yaml >> models_candidates.yaml
+
+# вручную перенести нужные записи из models_candidates.yaml в models.yaml
+python scripts/download_models.py --model Llama
+```
+
+
+# Data Flow — Model Download Pipeline
+
+Generated: 2026-02-20
+
+## Full Download Flow (with S3 sync)
+
+```mermaid
+flowchart TD
+    START([User: make download]) --> LOAD_ENV["load_dotenv(.env)"]
+    LOAD_ENV --> LOAD_CREDS["load_credentials(credentials.yaml)\n→ hf_token, S3Config"]
+    LOAD_CREDS --> LOAD_CONFIG["load_config(models.yaml)\n→ settings, list[ModelEntry]"]
+    LOAD_CONFIG --> FILTER["apply_filters()\n--model / --tag"]
+    FILTER --> LOOP{For each model}
+
+    LOOP --> GATED{model.gated\nAND no token?}
+    GATED -->|Yes| ERR_GATED["DownloadResult(ERROR)\n'Gated model: HF_TOKEN required'"]
+    GATED -->|No| CHECK_EXIST["check_existing()\nETag comparison"]
+
+    CHECK_EXIST --> SKIP_DEC{Decision}
+    SKIP_DEC -->|SKIP| SKIP_RESULT["DownloadResult(SKIP)\nfile is current"]
+    SKIP_DEC -->|DOWNLOAD| DOWNLOAD["hf_hub_download()\natom: tmp → rename"]
+
+    DOWNLOAD --> DL_OK{Success?}
+    DL_OK -->|No + retry left| WAIT["exponential backoff\n(5s × 2^attempt)\n429 → ×10 delay"]
+    WAIT --> DOWNLOAD
+    DL_OK -->|No + exhausted| ERR_DL["DownloadResult(ERROR)"]
+    DL_OK -->|Yes| ETAG["_write_local_etag()\nstore ETag sidecar"]
+    ETAG --> DL_RESULT["DownloadResult(DOWNLOAD)"]
+
+    DL_RESULT --> USE_S3{--upload-s3\nor --s3-only?}
+    SKIP_RESULT --> USE_S3
+    ERR_GATED --> USE_S3
+    ERR_DL --> USE_S3
+
+    USE_S3 -->|No| COLLECT["append to results"]
+    USE_S3 -->|Yes| S3_CHECK["s3_check_exists()\nhead_object size compare"]
+    S3_CHECK --> S3_DEC{S3 decision}
+    S3_DEC -->|SKIP| S3_SKIP["s3_status = SKIP"]
+    S3_DEC -->|UPLOAD| S3_UP["s3_upload_file()\nmultipart (100MB chunks)"]
+    S3_DEC -->|ERROR| S3_ERR["s3_status = ERROR"]
+    S3_UP --> S3_OK{Upload OK?}
+    S3_OK -->|Yes| S3_DONE["s3_status = UPLOADED"]
+    S3_OK -->|No| S3_FAIL["s3_status = ERROR"]
+
+    S3_SKIP --> S3_MODE{--s3-only?}
+    S3_DONE --> S3_MODE
+    S3_ERR --> COLLECT
+    S3_FAIL --> COLLECT
+    S3_MODE -->|Yes| DEL_LOCAL["unlink local file"]
+    S3_MODE -->|No| COLLECT
+    DEL_LOCAL --> COLLECT
+
+    COLLECT --> NEXT_MODEL{More models?}
+    NEXT_MODEL -->|Yes + inter_delay > 0| INTER_WAIT["sleep(inter_download_delay)"]
+    INTER_WAIT --> LOOP
+    NEXT_MODEL -->|Yes| LOOP
+    NEXT_MODEL -->|No| PRINT["print_results()\nsummary table"]
+    PRINT --> END([Exit code: 0 or 1])
+
+    style START fill:#e1f5ff,stroke:#0288d1
+    style END fill:#e1f5ff,stroke:#0288d1
+    style ERR_GATED fill:#ffcdd2,stroke:#c62828
+    style ERR_DL fill:#ffcdd2,stroke:#c62828
+    style S3_ERR fill:#ffcdd2,stroke:#c62828
+    style S3_FAIL fill:#ffcdd2,stroke:#c62828
+    style SKIP_RESULT fill:#e8f5e9,stroke:#388e3c
+    style DL_RESULT fill:#e8f5e9,stroke:#388e3c
+    style S3_DONE fill:#e8f5e9,stroke:#388e3c
+```
+
+## Web UI Save Flow
+
+```mermaid
+flowchart TD
+    USER([User toggles checkbox\nin browser]) --> JS_CHANGE["onEnabledChange()\ncollect changes map"]
+    JS_CHANGE --> SAVE_BTN["Click 'Сохранить' button"]
+    SAVE_BTN --> POST["POST /api/save\n{updates: [{repo_id, filename, enabled}]}"]
+    POST --> HANDLER["ModelBrowserHandler.do_POST()"]
+    HANDLER --> PARSE["json.loads(body)"]
+    PARSE --> SAVE["save_models(config_path, updates)"]
+    SAVE --> ATOM["load_yaml() → modify → tempfile.mkstemp()\n→ yaml.dump() → os.replace()\natomic write"]
+    ATOM --> OK{Success?}
+    OK -->|Yes| RESP_OK["HTTP 200\n{status: ok, updated: N}"]
+    OK -->|No| RESP_ERR["HTTP 400 (validation)\nHTTP 500 (filesystem)"]
+    RESP_OK --> UPDATE_JS["Update allModels in-place\nreset changes = {}"]
+    RESP_ERR --> SHOW_ERR["Show error message\nre-enable Save button"]
+
+    style USER fill:#e1f5ff,stroke:#0288d1
+    style ATOM fill:#fff4e1,stroke:#f57c00
+    style RESP_OK fill:#e8f5e9,stroke:#388e3c
+    style RESP_ERR fill:#ffcdd2,stroke:#c62828
+```
+
+
+# Dependency Graph — aihub
+
+Generated: 2026-02-20
+
+## Component Dependency Graph
+
+```mermaid
+graph TD
+    subgraph presentation["Presentation Layer"]
+        DL["download_models.py\nModel Downloader"]
+        BM["browse_models.py\nHF Hub Browser"]
+        MB["model_browser.py\nWeb UI (port 9000)"]
+    end
+
+    subgraph business["Business Layer"]
+        UT["utils.py\nShared Utilities\n(fmt_size, load_hf_token)"]
+    end
+
+    subgraph data["Data Layer"]
+        MC["models.yaml\nModel List Config"]
+        CC["credentials.yaml + .env\nCredentials & Env Config"]
+    end
+
+    subgraph external["External Services"]
+        HF["HuggingFace Hub API\n(huggingface_hub)"]
+        S3["S3-Compatible Storage\n(boto3: AWS/MinIO/Yandex/R2)"]
+        HFT["hf_transfer\n(optional Rust accelerator)"]
+    end
+
+    DL -->|"fmt_size, load_hf_token"| UT
+    DL -->|"reads model list & settings"| MC
+    DL -->|"reads HF token + S3 creds"| CC
+    BM -->|"load_hf_token"| UT
+    BM -->|"reads HF token"| CC
+    MB -->|"fmt_size"| UT
+    MB -->|"reads & writes atomically"| MC
+
+    DL -->|"hf_hub_download, list_models\nget_hf_file_metadata"| HF
+    BM -->|"list_models, list_repo_files"| HF
+    DL -.->|"optional: upload_file\nhead_object"| S3
+    DL -.->|"optional: fast download\nHF_HUB_ENABLE_HF_TRANSFER=1"| HFT
+
+    style presentation fill:#e1f5ff,stroke:#0288d1
+    style business fill:#fff4e1,stroke:#f57c00
+    style data fill:#ffe1e1,stroke:#c62828
+    style external fill:#f0f0f0,stroke:#757575
+    style DL fill:#b3e5fc,stroke:#0288d1
+    style BM fill:#b3e5fc,stroke:#0288d1
+    style MB fill:#b3e5fc,stroke:#0288d1
+    style UT fill:#ffe0b2,stroke:#f57c00
+    style MC fill:#ffcdd2,stroke:#c62828
+    style CC fill:#ffcdd2,stroke:#c62828
+    style HF fill:#e0e0e0,stroke:#757575
+    style S3 fill:#e0e0e0,stroke:#757575
+    style HFT fill:#e0e0e0,stroke:#757575
+```
+
+## Makefile → Script Mapping
+
+```mermaid
+graph LR
+    MK["Makefile"]
+    MK -->|"make setup"| SETUP["python3 -m venv .venv\npip install -r requirements.txt"]
+    MK -->|"make download"| DL["scripts/download_models.py"]
+    MK -->|"make list"| DL
+    MK -->|"make browse"| BM["scripts/browse_models.py"]
+    MK -->|"make ui"| MB["scripts/model_browser.py"]
+    MK -->|"make update"| UPDATE["pip install --upgrade -r requirements.txt"]
+
+    style MK fill:#fff4e1,stroke:#f57c00
+    style DL fill:#b3e5fc,stroke:#0288d1
+    style BM fill:#b3e5fc,stroke:#0288d1
+    style MB fill:#b3e5fc,stroke:#0288d1
+```
+
+## Credential Resolution Chain
+
+```mermaid
+graph LR
+    A["credentials.yaml\n(highest priority)"] -->|"HF token,\nS3 keys"| UT["utils.load_hf_token()\ndownload_models.load_credentials()"]
+    B[".env\n(medium priority)"] -->|"S3 bucket,\nregion, endpoint"| UT
+    C["Environment Variables\n(lowest priority)\nHF_TOKEN, AWS_*"] -->|"fallback"| UT
+
+    style A fill:#ffcdd2,stroke:#c62828
+    style B fill:#ffcdd2,stroke:#c62828
+    style C fill:#f0f0f0,stroke:#757575
+    style UT fill:#ffe0b2,stroke:#f57c00
+```
+
+
+# Полное руководство по локальным AI-моделям в 2025–2026
+
+**Локальный запуск ИИ стал реальностью для обычного пользователя.** К началу 2026 года экосистема открытых моделей достигла зрелости: модели на 7–14 миллиардов параметров работают на потребительских видеокартах со скоростью 30–100 токенов/сек, а инструменты вроде Ollama набрали более 100 000 звёзд на GitHub. Формат **GGUF** стал де-факто стандартом для локального запуска, а квантизация Q4_K_M — золотой серединой между качеством и требованиями к памяти. Данное руководство охватывает все ключевые модели, инструменты, источники загрузки и аппаратные требования для полностью автономной работы с ИИ.
+
+---
+
+## 1. Большие языковые модели для локального использования
+
+### Универсальные текстовые и чат-модели
+
+**Llama 3.x (Meta)** остаётся одним из главных семейств открытых моделей. **Llama 3.1** доступна в размерах 8B, 70B и 405B параметров с контекстом 128K токенов. **Llama 3.3 70B** (декабрь 2024) — финальная модель серии, по качеству не уступающая предшественнице на 405B. В формате GGUF Q4_K_M файл занимает около **42,8 ГБ** и может работать на RTX 4090 с выгрузкой части слоёв на CPU. **Llama 3.2** добавила лёгкие модели на 1B и 3B (для мобильных устройств) и мультимодальные варианты на 11B и 90B. Лицензия — Llama Community License (условно-коммерческая). Загрузка: `meta-llama/Llama-3.3-70B-Instruct` на HuggingFace; GGUF-версии от `bartowski` и `unsloth`.
+
+**Llama 4** (апрель 2025) перешла на архитектуру Mixture-of-Experts. **Llama 4 Scout** активирует 17B из 109B параметров и поддерживает контекст до **10 миллионов токенов**. **Llama 4 Maverick** — 17B активных из 400B, контекст 1M. Обе модели мультимодальны (текст + изображения). Лицензия — Llama 4 Community License.
+
+**Qwen 2.5 (Alibaba)** — одна из самых гибких линеек, доступна в **семи размерах**: 0.5B, 1.5B, 3B, 7B, 14B, 32B и 72B. Контекст до 128K токенов, поддержка 29+ языков включая русский. Лицензия Apache 2.0. Официальные GGUF доступны напрямую от Qwen. В формате Q4_K_M: 7B — ~4,7 ГБ, 14B — ~9 ГБ, 32B — ~20 ГБ, 72B — ~42 ГБ. **Модель на 32B — оптимальный выбор для RTX 4090.** Наследник **Qwen 3** (середина 2025) предлагает размеры до 235B (MoE, 22B активных) с гибридным режимом рассуждений.
+
+**Mistral / Mixtral (Mistral AI)** предлагает широкую линейку. **Mistral 7B** (Apache 2.0) — ~4,5 ГБ VRAM в Q4_K_M, отличная эффективность. **Mixtral 8x7B** — MoE на 46,7B параметров (12,9B активных), ~26 ГБ VRAM. **Mistral Large 3** (декабрь 2025) — новый флагман на 675B (41B активных), контекст 256K, мультимодальность, лицензия **Apache 2.0**. Для потребительского оборудования интересны **Ministral 3** в размерах 3B, 8B и 14B, включая варианты для рассуждений.
+
+**DeepSeek R1** (январь 2025) — модель-рассуждатель мирового уровня, сопоставимая с OpenAI o1. Полная модель на 671B требует сотни гигабайт памяти, но **дистиллированные версии** идеальны для локального запуска:
+
+| Версия | Параметры | VRAM (Q4) | Основа |
+|--------|-----------|-----------|--------|
+| R1-Distill-Qwen-1.5B | 1,5B | ~3 ГБ | Qwen |
+| R1-Distill-Qwen-7B | 7B | ~5 ГБ | Qwen |
+| R1-Distill-Qwen-14B | 14B | ~10 ГБ | Qwen |
+| R1-Distill-Qwen-32B | 32B | ~20 ГБ | Qwen |
+| R1-Distill-Llama-70B | 70B | ~42 ГБ | Llama |
+
+Версия на **32B** — популярный выбор: близка по качеству к o1-mini и помещается на RTX 4090. Лицензия: код MIT, веса — DeepSeek License.
+
+**Phi-4 (Microsoft)** — 14B параметров, лицензия **MIT**. Выдающееся качество рассуждений и кода для своего размера: MATH 80,4%, HumanEval 82,6%. Q4_K_M файл — ~8,4 ГБ, комфортно работает на 12 ГБ VRAM. **Phi-4-mini** (3,8B) — всего ~2,5 ГБ в Q4_K_M.
+
+**Gemma 2 (Google)** доступна в размерах 2B, 9B и 27B. Модель на 27B конкурирует с моделями в 2 раза крупнее. Q4_K_M: 9B — ~6 ГБ, 27B — ~16 ГБ. Лицензия — Gemma Terms of Use (разрешает коммерческое использование).
+
+**Command-R (Cohere)** — 35B и 104B, оптимизированы для RAG и работы с инструментами. Лицензия CC-BY-NC (некоммерческая для открытых весов).
+
+**Yi (01.AI)** — билингвальное семейство (китайский-английский) на 6B, 9B, 34B. Apache 2.0. Постепенно уступает позиции Qwen.
+
+### Модели для генерации кода
+
+**Qwen2.5-Coder** — лидер среди открытых кодовых моделей. Доступна в размерах от 0.5B до 32B, обучена на 5,5 триллиона токенов (70% код), поддерживает **92+ языка программирования**, контекст 128K. Версия 32B конкурирует с GPT-4o на бенчмарке Aider. Лицензия Apache 2.0. Наследник **Qwen3-Coder** (2025) — 480B MoE, 350+ языков, контекст 256K. Загрузка: `Qwen/Qwen2.5-Coder-{size}B-Instruct-GGUF`.
+
+**DeepSeek Coder V2** — MoE архитектура, 16B (Lite) и 236B, **338 языков программирования**, контекст 128K. 16B-версия популярна для быстрого автодополнения. Загрузка: `deepseek-ai/deepseek-coder-v2`.
+
+**CodeLlama (Meta)** — 7B, 13B, 34B, 70B с вариантами Base, Instruct и Python. Контекст 16K (до 100K с RoPE scaling). Огромная экосистема файнтюнов. Q4 для 34B — ~20 ГБ VRAM.
+
+**StarCoder2 (BigCode)** — 3B, 7B, 15B, обучен на 600+ языках из The Stack v2. Лицензия OpenRAIL-M. Прозрачные данные обучения. 15B в 4-bit — ~9,2 ГБ VRAM.
+
+**Codestral (Mistral)** — 22B, поддержка Fill-in-the-Middle, 80+ языков. Лицензия MNPL (некоммерческая). **Codestral Mamba 7B** — Apache 2.0, быстрая архитектура.
+
+**Devstral (Mistral)** — специализированная модель для агентного кодирования (многофайловые операции, CLI, инструменты), работает на одной RTX 4090.
+
+### SQL-специализированные модели
+
+**Defog SQLCoder** — наиболее зрелое решение. **Llama-3-SQLCoder-8B** достигает **>90% точности** на SQL-Eval в zero-shot режиме, поддерживает PostgreSQL, Redshift, Snowflake. GGUF-версии доступны от `QuantFactory` и `bartowski`. Предшественники SQLCoder v1/v2 на 15B также доступны; `TheBloke/sqlcoder2-GGUF` для второй версии.
+
+**DuckDB-NSQL** — 7B параметров на базе Llama-2, специализирован на DuckDB SQL. Генерирует не только SELECT, но и любые DuckDB-запросы. GGUF доступен: `motherduckdb/DuckDB-NSQL-7B-v0.1-GGUF`. В Ollama — `duckdb-nsql` (3,8 ГБ в Q4_0).
+
+**NSQL (NumbersStation)** — семейство от 350M до 7B (на базе Llama-2). NSQL-6B превосходит все открытые модели на Spider по точности выполнения. Загрузка: `NumbersStation/nsql-*` на HuggingFace.
+
+**Важное замечание:** крупные кодовые модели (Qwen2.5-Coder, DeepSeek Coder) при правильном промптинге также отлично справляются с генерацией SQL-запросов.
+
+### Модели эмбеддингов для RAG
+
+Для построения RAG-систем необходимы модели эмбеддингов, преобразующие тексты в векторные представления. Ключевые модели для локального запуска:
+
+**BGE-M3 (BAAI)** — флагманская модель: ~568M параметров, **8192 токенов контекста**, 1024 измерения, **100+ языков**. Уникальна тем, что объединяет плотный, разреженный и мульти-векторный поиск в одной модели. GGUF доступен: `gpustack/bge-m3-GGUF`. В Ollama — `bge-m3`. Дополнительно доступен **bge-reranker-v2-m3** — перерейтинг-модель для второго этапа поиска.
+
+**nomic-embed-text v1.5 (Nomic AI)** — 137M параметров, 768 измерений с поддержкой Matryoshka (усечение до 64), контекст 8192. Превосходит OpenAI text-embedding-ada-002. Apache 2.0. В Ollama — `nomic-embed-text` (54,5M загрузок). Версия **v2 (MoE)** — 475M параметров, 100+ языков.
+
+**mxbai-embed-large (Mixedbread AI)** — ~335M параметров, 1024 измерения, SOTA для BERT-large класса. Apache 2.0. GGUF доступен, в Ollama — `mxbai-embed-large`.
+
+**Qwen3-Embedding (Alibaba)** — новейшее семейство (0.6B, 4B, 8B). Версия 8B — **#1 на MTEB multilingual** и MTEB-Code. 100+ языков, контекст 32K, Matryoshka 32–4096. Apache 2.0.
+
+**E5 (Microsoft)** — серия от 33M до 7B (e5-mistral-7b-instruct). **multilingual-e5-large** — 560M, 100+ языков. Лицензия MIT.
+
+**Snowflake Arctic Embed v2.0** — мультилингвальная модель, до 32K токенов, 100+ языков, гибкие измерения 32–4096.
+
+**Giga-Embeddings-instruct (Sber)** — **#1 на ruMTEB** (русский бенчмарк эмбеддингов), инициализирована из предобучения GigaChat. Лучший выбор для русскоязычного RAG.
+
+### Русскоязычные модели
+
+**Saiga (IlyaGusev)** — наиболее известное семейство русскоязычных файнтюнов. Системный промпт: «Ты — Сайга, русскоязычный автоматический ассистент». Самый популярный вариант — **saiga_llama3_8b** (362K+ загрузок): 8B параметров на базе Llama-3-8B, GGUF Q4_K ~4,6 ГБ. Также доступны: saiga_mistral_7b, saiga2_13b, saiga_yandexgpt_8b и другие. Загрузка: `IlyaGusev/saiga_*` на HuggingFace; коллекция «Saiga GGUF» (8 моделей).
+
+**GigaChat (Sber / ai-sage)** выпустил открытые модели под лицензией MIT:
+- **GigaChat-20B-A3B** — MoE, 20B всего / 3B активных, контекст 131K
+- **GigaChat3-10B-A1.8B** (Lightning) — 10B / 1,8B активных, обучена на 20T токенов, скорость сравнима с 3–4B плотными моделями, **GGUF доступен**: `ai-sage/GigaChat3-10B-A1.8B-GGUF`
+- **GigaChat3-702B-A36B** (Ultra Preview) — 702B / 36B активных, флагман для кластерного развёртывания
+
+Данные обучения: русский 26,5% + английский 63,8%.
+
+**T-Lite и T-Pro (T-Bank, ранее Тинькофф)** — модели на базе Qwen-2.5, адаптированные для русского языка. **T-Lite** — 7B, продолженное предобучение на 100B+ русских токенов + SFT. **T-Pro** — 32B, заявляет **#1 среди открытых моделей** в русском по MERA, ruMMLU, Ru Arena Hard. Гибридный режим рассуждений. Apache 2.0. GGUF: `QuantFactory/T-lite-01-gguf`, Ollama: `blackened/t-lite`.
+
+**Vikhr (Vikhrmodels)** — уникальный подход с полной адаптацией словаря (не только LoRA): переделанный токенизатор + продолженное предобучение всех весов. **Vikhr-7b** на базе Mistral-7B. Apache 2.0. Команда ведёт Russian LLM Leaderboard на HuggingFace.
+
+**Среди международных моделей лучшую поддержку русского обеспечивают:** Qwen (базовая модель для T-Lite/T-Pro, что говорит о сильном русском предобучении), Mistral (база для Vikhr), Llama 3 (база для Saiga), DeepSeek (высокие показатели на MERA).
+
+---
+
+## 2. Модели генерации изображений для локального запуска
+
+### Основные модели
+
+**Stable Diffusion 1.5** — ветеран с огромнейшей экосистемой. ~860M параметров, разрешение 512×512, всего **4–6 ГБ VRAM**. На CivitAI доступны тысячи файнтюнов (Realistic Vision, Anything v5 и др.), LoRA и ControlNet. Идеален для слабого оборудования. Загрузка: `runwayml/stable-diffusion-v1-5`.
+
+**SDXL (Stable Diffusion XL)** — крупный шаг вперёд: ~3,5B параметров, 1024×1024, два текстовых энкодера. Значительно лучшее качество, руки, лица. **8 ГБ VRAM минимум**, 12 ГБ комфортно. Turbo и Lightning варианты позволяют генерацию за 1–8 шагов. Загрузка: `stabilityai/stable-diffusion-xl-base-1.0`.
+
+**SD3.5 (Stable Diffusion 3.5)** — новая архитектура **MMDiT** (трансформер вместо UNet), тройной текстовый энкодер (CLIP-L + CLIP-G + T5-XXL). SD3.5 Medium (2,5B) — ~6 ГБ VRAM, SD3.5 Large (8B) — ~18 ГБ (11 ГБ с FP8 TensorRT). SD3.5 Large Turbo генерирует за 4 шага. Хорошая передача текста на изображениях. Лицензия Stability AI Community (бесплатно при выручке <$1M). Загрузка: `stabilityai/stable-diffusion-3.5-large`.
+
+**FLUX.1 (Black Forest Labs)** — **прорывная модель 2024 года**, ~12B параметров, архитектура DiT. Феноменальная точность следования промптам, отрисовка текста и рук. Два варианта для загрузки:
+- **FLUX.1 [schnell]** — дистиллированная (1–4 шага), **Apache 2.0**, бесплатна для коммерции
+- **FLUX.1 [dev]** — полное качество (20–50 шагов), некоммерческая лицензия
+
+Требования к VRAM: полный BF16 — ~33 ГБ; FP8 — 16 ГБ; NF4/Q4 — работает на **8 ГБ**. Оптимально — 16–24 ГБ. GGUF-версии доступны. Загрузка: `black-forest-labs/FLUX.1-dev`, `black-forest-labs/FLUX.1-schnell`.
+
+**FLUX.2** (ноябрь 2025): dev-версия на 32B, klein-версии на 9B и 4B (klein 4B — ~13 ГБ VRAM). Существенно более требовательна.
+
+**Kandinsky (Sber AI)** — российская модель. **Kandinsky 3.1** — ~11,9B параметров, поддержка ControlNet, IP-Adapter, Flash-генерация. Apache 2.0. Ориентирована на российскую культуру. VRAM: вероятно 16–24 ГБ. Загрузка: `ai-forever/Kandinsky3.1`.
+
+**PixArt-Σ (Sigma)** — лёгкий трансформер (~600M), поддержка до 4K, менее **8 ГБ VRAM** с оптимизациями. Конкурирует с SDXL при значительно меньших ресурсах.
+
+**Playground v2.5** — архитектура SDXL, но с улучшенным обучением. Превосходит SDXL по эстетике в **4,8 раза** по пользовательским оценкам. 8 ГБ VRAM.
+
+### Расширения базовых моделей
+
+**ControlNet** добавляет структурный контроль: карты глубины, позы, контуры, сегментация. Доступен для SD 1.5, SDXL, SD3, FLUX. Размер модели 700 МБ – 1,5 ГБ.
+
+**IP-Adapter** (~100 МБ) позволяет использовать референсное изображение для управления стилем или лицом. **LoRA** (10–200 МБ) — лёгкие адаптеры для стилей, персонажей, концепций. На CivitAI сотни тысяч LoRA.
+
+### Инструменты для генерации изображений
+
+**ComfyUI** — нодовый редактор рабочих процессов. Максимальная гибкость, поддержка всех моделей (SD 1.5, SDXL, SD3, FLUX, PixArt и др.), самая высокая производительность (в ~2 раза быстрее A1111). Крутая кривая обучения, но мощнейший инструмент. GitHub: `comfyanonymous/ComfyUI` (84K+ звёзд).
+
+**Stable Diffusion WebUI Forge** — оптимизированный форк AUTOMATIC1111 с **улучшением скорости на 30–75%**, лучшим управлением VRAM и поддержкой FLUX. Привычный интерфейс A1111. GitHub: `lllyasviel/stable-diffusion-webui-forge`.
+
+**AUTOMATIC1111** — классический веб-интерфейс с огромной экосистемой расширений. Самый задокументированный (80% туториалов на YouTube). В режиме обслуживания — многие переходят на Forge или ComfyUI. GitHub: `AUTOMATIC1111/stable-diffusion-webui` (155K+ звёзд).
+
+**Fooocus** — максимально простой интерфейс в стиле Midjourney. Автоматизирует технические параметры. Идеален для новичков. GitHub: `lllyasviel/Fooocus`.
+
+**InvokeAI** — профессиональный инструмент с канвасом как в Photoshop: слои, инпейнтинг, региональные промпты. GitHub: `invoke-ai/InvokeAI`.
+
+**Draw Things** — нативное приложение для macOS/iOS, оптимизировано под Apple Silicon (Metal FlashAttention). Поддерживает SD 1.5, SDXL, FLUX, генерацию видео. Бесплатно в App Store.
+
+---
+
+## 3. Инструменты для локального запуска LLM
+
+### Основные рантаймы
+
+**Ollama** — де-факто стандарт для локального запуска LLM. Установка одной командой, запуск модели одной командой (`ollama run llama3.2`). Библиотека из 100+ моделей. OpenAI-совместимый REST API на порту 11434. Поддержка NVIDIA (CUDA), AMD (ROCm), Apple Silicon (Metal), CPU. Автоматическое определение оборудования. Формат — GGUF (на базе встроенного llama.cpp). GitHub: `ollama/ollama` (**100K+ звёзд**). Платформы: macOS, Linux, Windows, Docker.
+
+Ключевые команды:
+```
+ollama pull qwen2.5:14b      # Загрузить модель
+ollama run qwen2.5:14b       # Запустить интерактивно
+ollama list                   # Список установленных
+ollama show qwen2.5:14b      # Информация о модели
+```
+
+Для импорта собственных GGUF-файлов создаётся Modelfile: `FROM ./path/to/model.gguf`, затем `ollama create mymodel -f Modelfile`.
+
+**llama.cpp** — основа экосистемы, написана на чистом C/C++ Георгием Гергановым. Определяет формат **GGUF** — бинарный формат, хранящий тензоры и метаданные в одном файле. Поддерживает квантизацию от 1,5-бит до F32. Оптимизации: ARM NEON, AVX2, AVX-512, CUDA, Metal, ROCm, Vulkan. Частичная выгрузка на GPU (флаг `--ngl`). Включает `llama-server` с OpenAI-совместимым API и веб-интерфейсом. Мультимодальность через libmtmd. GitHub: `ggml-org/llama.cpp` (85K+ звёзд).
+
+**LM Studio** — элегантное десктопное приложение с GUI. Встроенный браузер моделей с автоматическим определением совместимости с оборудованием. Загрузка и запуск GGUF-моделей в пару кликов. Режим сервера (OpenAI- и Anthropic-совместимые API). RAG через «Chat with Documents». В версии 0.4.0: headless-демон `llmster`, параллельные запросы, поддержка MCP. Движки: llama.cpp и Apple MLX. Платформы: macOS, Windows, Linux. Сайт: lmstudio.ai.
+
+**GPT4All (Nomic AI)** — десктопное приложение, **оптимизированное для CPU**. Встроенный RAG через LocalDocs (PDF, текст, документы). Более 1000 моделей. Использует llama.cpp. Минимальные требования: Intel Core i3 2-го поколения или AMD Bulldozer. GitHub: `nomic-ai/gpt4all` (73K+ звёзд).
+
+### Инструменты для продвинутых пользователей
+
+**vLLM** — высокопроизводительный сервер вывода с ключевой инновацией **PagedAttention** (управление KV-кэшем как виртуальной памятью, менее 4% потерь vs 60–80% у обычных систем). До **24 раз быстрее** HuggingFace Transformers. Тензорный, конвейерный и экспертный параллелизм. OpenAI-совместимый API. Требует GPU (NVIDIA основной, AMD, Intel). Лучший выбор для продуктивных развёртываний. GitHub: `vllm-project/vllm`.
+
+**text-generation-webui (oobabooga)** — «Определяющий WebUI» для локального ИИ. Gradio-интерфейс с множеством бэкендов: llama.cpp, Transformers, ExLlamaV2/V3, TensorRT-LLM. Поддерживает **все форматы**: GGUF, GPTQ, AWQ, EXL2, SafeTensors. Режимы: чат, инструкции, блокнот. Расширения: TTS, поиск, LoRA-обучение. Портативные сборки (распаковать и запустить). GitHub: `oobabooga/text-generation-webui` (46K+ звёзд).
+
+**ExLlamaV2 / ExLlamaV3** — самый быстрый движок для GPU-вывода на потребительских видеокартах. Формат **EXL2**: переменная битность по слоям (2–8 бит), лучшее соотношение perplexity к скорости. На **85% быстрее** llama.cpp, на **147% быстрее** bitsandbytes. Требует NVIDIA GPU. API-сервер через TabbyAPI.
+
+**KoboldCpp** — **единый исполняемый файл**, не требующий установки. Встроенный веб-интерфейс KoboldAI Lite. Совместимость с API: KoboldCpp, OpenAI, Ollama, A1111, ComfyUI, Whisper. Идеален для креативного письма. Поддерживает генерацию текста + изображений + TTS + STT. GitHub: `LostRuins/koboldcpp`.
+
+**LocalAI** — полноценная замена OpenAI API. Генерация текста, изображений (SD, SDXL, SD3, FLUX), аудио (Whisper, TTS), эмбеддинги, GPT Vision. Множество бэкендов. Распределённый P2P вывод. Совместимость с API OpenAI и Anthropic. MIT лицензия. GitHub: `mudler/LocalAI` (30K+ звёзд).
+
+### Клиенты и фронтенды
+
+**Open WebUI** — самохостируемый веб-интерфейс в стиле ChatGPT. Интеграция с Ollama и OpenAI-совместимыми API. RAG с 9 вариантами векторных БД. Голосовые/видеозвонки, генерация изображений. Ролевой доступ (RBAC). GitHub: `open-webui/open-webui` (60K+ звёзд).
+
+**Jan.ai** — офлайн-ассистент с чистым десктопным интерфейсом. Загрузка GGUF с HuggingFace Hub. Интеграция облачных провайдеров. MCP для агентных возможностей. AGPLv3. Сайт: jan.ai.
+
+**Msty** — мультипровайдерный интерфейс: Ollama, OpenAI, Anthropic, HuggingFace. Параллельные чаты с разными моделями, сравнение ответов. Knowledge Stacks (импорт документов). Сайт: msty.ai.
+
+### Прочие инструменты
+
+**llamafile (Mozilla)** — модель + рантайм в одном исполняемом файле. Кроссплатформенный, двойной клик для запуска. Максимально простое развёртывание.
+
+**Tabby (TabbyML)** — самохостируемый сервер автодополнения кода. Плагины для VS Code, JetBrains, Vim. RAG по кодовой базе. GitHub: `TabbyML/tabby`.
+
+**PowerInfer** — гибридный CPU/GPU движок, эксплуатирующий локальность активаций нейронов (13–29 tok/s на RTX 4090 для OPT-175B).
+
+**SGLang** — перспективный движок вывода, рекомендуемый HuggingFace наряду с vLLM как замена TGI (который переведён в режим обслуживания).
+
+| Инструмент | Тип | Форматы | GPU обязателен? | OpenAI API | Простота |
+|-----------|-----|---------|-----------------|-----------|---------|
+| Ollama | CLI-рантайм | GGUF | Нет | ✅ | ★★★★★ |
+| llama.cpp | C++ библиотека | GGUF | Нет | ✅ | ★★★ |
+| LM Studio | GUI | GGUF, MLX | Нет | ✅ | ★★★★★ |
+| GPT4All | GUI | GGUF | Нет | ✅ | ★★★★ |
+| vLLM | Сервер вывода | SafeTensors, GPTQ, AWQ | Да | ✅ | ★★★ |
+| KoboldCpp | Единый exe | GGUF | Нет | ✅ | ★★★★ |
+| LocalAI | API-сервер | Все форматы | Нет | ✅ | ★★★ |
+| text-gen-webui | WebUI | Все форматы | Нет | ✅ | ★★★ |
+| ExLlamaV2 | Библиотека | EXL2, GPTQ | Да (NVIDIA) | Через TabbyAPI | ★★ |
+| Open WebUI | Веб-фронтенд | Через бэкенды | Нет | Фронтенд | ★★★★ |
+
+---
+
+## 4. Источники и репозитории для загрузки моделей
+
+### HuggingFace Hub — главный репозиторий
+
+**HuggingFace** (huggingface.co) — крупнейший в мире репозиторий открытых моделей (**400 000+ моделей**). Каждая модель живёт в git-репозитории с поддержкой Git LFS для больших файлов.
+
+**Поиск моделей:** страница huggingface.co/models с фильтрами по задаче (text-generation, summarization…), языку, библиотеке (GGUF, transformers, diffusers…), лицензии. Для GGUF: фильтр `library=gguf`.
+
+**Загрузка через CLI:**
+```bash
+pip install -U "huggingface_hub[cli]"
+# Загрузить один GGUF-файл:
+huggingface-cli download bartowski/Qwen2.5-14B-Instruct-GGUF \
+  Qwen2.5-14B-Instruct-Q4_K_M.gguf --local-dir ./models
+# С ускорением:
+pip install huggingface_hub[hf_xet]
+export HF_HUB_ENABLE_HF_TRANSFER=1
+```
+
+**Загрузка через Python:**
+```python
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id="bartowski/Qwen2.5-14B-Instruct-GGUF",
+                filename="Qwen2.5-14B-Instruct-Q4_K_M.gguf",
+                local_dir="./models")
+```
+
+**Шаблон прямой ссылки:** `https://huggingface.co/{repo_id}/resolve/main/{filename}`
+
+### Поставщики квантизированных моделей
+
+**bartowski** (huggingface.co/bartowski) — ведущий поставщик GGUF-квантизаций (наследник TheBloke). Все квантизации с **importance matrix** для лучшего качества. Полная лестница: от IQ2_XXS до BF16. Покрывает все новейшие модели: Qwen 3, Llama 3.x, DeepSeek, Phi. Фирменные **XL-варианты** (Q3_K_XL, Q4_K_L) с эмбеддингами в Q8_0.
+
+**Рекомендация bartowski:** «Чтобы модель работала максимально БЫСТРО, она должна целиком поместиться в VRAM. Выбирайте квант с размером файла на 1–2 ГБ меньше вашего VRAM.»
+
+**TheBloke** (huggingface.co/TheBloke) — исторически главный квантизатор (менее активен с 2024). Для каждой модели загружал GGUF, GPTQ и fp16 версии. Именование: `TheBloke/{Model}-GGUF`, файлы: `model.Q4_K_M.gguf`.
+
+### Другие источники
+
+**Ollama Library** (ollama.com/library) — `ollama pull llama3.2` автоматически загружает GGUF. Библиотека из 100+ моделей. Для импорта собственных GGUF-файлов — через Modelfile.
+
+**CivitAI** (civitai.com) — крупнейший репозиторий для генерации изображений. Чекпойнты (2–7 ГБ), LoRA (10–200 МБ), текстовые инверсии, VAE, рабочие процессы ComfyUI. API для автоматической загрузки.
+
+**ModelScope** (modelscope.cn) — «китайский HuggingFace» от Alibaba DAMO. 5000+ моделей, 2,8M+ разработчиков. Богат китайскоязычными моделями (Qwen, Baichuan, DeepSeek). Python SDK: `pip install modelscope`.
+
+**GitHub Releases** — предсобранные бинарники инструментов (llama.cpp, Ollama). Релизы моделей из официальных репозиториев.
+
+---
+
+## 5. Аппаратные требования и руководство по выбору
+
+### Формула расчёта VRAM
+
+Базовая формула: **VRAM (ГБ) ≈ Параметры (млрд) × байт_на_вес + накладные расходы**. Для Q4 квантизации — примерно **0,5 ГБ на миллиард параметров**, для Q8 — ~1 ГБ, для FP16 — ~2 ГБ. Дополнительно 0,5–1 ГБ на CUDA-контекст и **KV-кэш** (растёт линейно с длиной контекста: ~4,5 ГБ для 8B модели при 32K контексте в FP16).
+
+### Что помещается в различные объёмы VRAM
+
+| VRAM | GPU-примеры | Модели в Q4_K_M |
+|------|-------------|-----------------|
+| **4 ГБ** | GTX 1650, RTX 3050 | 1–3B (Phi-4-mini, Qwen 2.5 3B) |
+| **6 ГБ** | RTX 2060, GTX 1660 Super | 7B в Q3_K_M с коротким контекстом |
+| **8 ГБ** | RTX 3060 8GB, RTX 4060 | **7–8B** комфортно (Qwen 3 8B: ~42 tok/s на RTX 4060) |
+| **12 ГБ** | RTX 3060 12GB, RTX 4070 | **13–14B** (Phi-4, Qwen 2.5 14B); 7B в Q8 |
+| **16 ГБ** | RTX 4080, RTX 5080 | **30–34B** впритык; 13–14B в Q8 |
+| **24 ГБ** | RTX 3090, RTX 4090 | **32B** комфортно; 70B в Q3 (впритык) |
+| **48+ ГБ** | 2×RTX 4090, A100, RTX 6000 | **70B** комфортно; 100B+ MoE |
+
+### Вывод на CPU
+
+Любая модель, помещающаяся в оперативную память, может работать на CPU — в **5–30 раз медленнее**, чем на GPU. Производительность ограничена **пропускной способностью памяти**, а не вычислительной мощностью.
+
+| RAM | Какие модели запускаются |
+|-----|------------------------|
+| 16 ГБ | 7B в Q4 |
+| 32 ГБ | 13B; 7B в высоких квантах |
+| 64 ГБ | 30–34B в Q4; 70B в Q2–Q3 (очень медленно) |
+| 128 ГБ+ | 70B в Q4–Q6 (~1–3 tok/s) |
+
+**Ориентиры скорости:** 7B Q4 на современном CPU — **8–15 tok/s**; 34B Q4 — ~2–5 tok/s; MacBook M1/M2 (7B Q4) — **30–50 tok/s** (преимущество единой памяти). Для справки: 2 tok/s ≈ скорость набора текста человеком, 5–10 tok/s — комфортный чат, ~30 tok/s — нужно для автодополнения кода.
+
+**Выбор CPU:** Главный фактор — **пропускная способность памяти**, а не количество ядер. **AVX2** — минимум для приемлемой работы llama.cpp. **AVX-512** даёт прирост ~50%+. **DDR5** быстрее DDR4 на 20–30%. Заполняйте все слоты DIMM для максимальной ширины шины. При выводе используйте только физические ядра (гипертрединг может мешать).
+
+### Форматы квантизации: руководство по выбору
+
+**GGUF (llama.cpp)** — основной формат для локального запуска. Поддерживает CPU, GPU и гибридный вывод. K-кванты (K_S, K_M) используют двухуровневую блочную схему для лучшего качества:
+
+| Квант | Бит/вес | Качество | Рекомендация |
+|-------|---------|----------|-------------|
+| Q2_K | ~2,5 | Низкое | Только для экспериментов |
+| Q3_K_M | ~3,9 | Ниже среднего | Для больших моделей в ограниченной памяти |
+| **Q4_K_M** | **~4,8** | **Очень хорошее** | ⭐ **Рекомендуемый по умолчанию** |
+| Q5_K_M | ~5,7 | Отличное | Шаг вверх, если VRAM позволяет |
+| Q6_K | ~6,6 | Почти без потерь | Когда качество приоритетно |
+| Q8_0 | ~8,5 | Ближайший к FP16 | Максимум качества в обычных GGUF |
+
+**I-кванты** (IQ2_XXS, IQ3_XS и др.) — используют таблицы поиска и нелинейные методы. Лучшее качество на бит при экстремально низкой битности (<4 бит), но более тяжёлая деквантизация.
+
+**GPTQ** — GPU-ориентированная квантизация (4/8-бит). Хранится в safetensors. Поддерживается: ExLlamaV2, AutoGPTQ, vLLM, TensorRT-LLM.
+
+**AWQ** — активационно-осведомлённая квантизация. Лучшее сохранение качества (~95% vs ~90% у GPTQ), особенно для инструкт-моделей. Быстрый вывод на GPU.
+
+**EXL2** — переменная битность по слоям. Самый быстрый вывод на NVIDIA GPU. Только для ExLlamaV2.
+
+**Выбор формата:**
+
+- **CPU или CPU+GPU гибрид → GGUF** (единственный вариант для смешанного вывода)
+- **NVIDIA GPU, ≤8 ГБ → GGUF Q4_K_M**
+- **NVIDIA GPU, 12–16 ГБ → GPTQ или AWQ** (альтернатива: GGUF Q5_K_M)
+- **NVIDIA GPU, 24 ГБ+, максимальная скорость → EXL2**
+- **Кроссплатформенность → GGUF**
+- **Ежедневный чат → GGUF Q4_K_M**
+
+### Практические рекомендации по конфигурациям
+
+**Бюджетная сборка (8 ГБ VRAM, RTX 4060):** Qwen 2.5 7B, Llama 3.1 8B, Phi-4-mini 3.8B, DeepSeek R1-Distill-7B. Для изображений: SD 1.5, SDXL, FLUX.1 schnell в Q4. Инструмент: Ollama или LM Studio.
+
+**Оптимальная сборка (12 ГБ VRAM, RTX 4070):** Qwen 2.5 14B, Phi-4 14B, Gemma 2 9B в Q5+, Saiga Llama3 8B в Q8. Для изображений: SDXL, SD3.5 Medium. Инструмент: Ollama + Open WebUI.
+
+**Мощная сборка (24 ГБ VRAM, RTX 4090):** Qwen 2.5 32B, DeepSeek R1-Distill-32B, T-Pro 32B, Gemma 2 27B. Для изображений: FLUX.1 dev в FP8, SD3.5 Large. Инструмент: любой; ExLlamaV2 для максимальной скорости.
+
+**Серверная сборка (48+ ГБ):** Llama 3.3 70B, Qwen 2.5 72B. Для продуктива: vLLM или SGLang.
+
+---
+
+## Заключение: ключевые выводы
+
+Экосистема локального ИИ в 2025–2026 достигла точки, где **модель на 14B параметров с квантизацией Q4_K_M** — примерно 9 ГБ на видеокарте — даёт качество, сопоставимое с GPT-4 уровня 2023 года. Для русского языка наиболее перспективны модели **T-Pro 32B** и **Saiga** на свежих базовых моделях, а для эмбеддингов — **Giga-Embeddings-instruct**. Формат GGUF и инструмент Ollama стали стандартом де-факто, снизив порог входа до единственной команды в терминале.
+
+Три самых значимых тренда: архитектура **Mixture-of-Experts** позволяет запускать модели с сотнями миллиардов параметров на доступном оборудовании (GigaChat3-10B-A1.8B работает как 4B плотная модель); протокол **MCP** объединяет модели с внешними инструментами для агентных задач; а **FLUX.1** переопределил стандарты качества генерации изображений, оставаясь доступным на 8 ГБ видеопамяти в квантизованном виде. Практически все перечисленные модели доступны для загрузки с HuggingFace Hub бесплатно и без ограничений.
+
+================
+Vendoring Policy
+================
+
+* Vendored libraries **MUST** not be modified except as required to
+  successfully vendor them.
+* Vendored libraries **MUST** be released copies of libraries available on
+  PyPI.
+* Vendored libraries **MUST** be available under a license that allows
+  them to be integrated into ``pip``, which is released under the MIT license.
+* Vendored libraries **MUST** be accompanied with LICENSE files.
+* The versions of libraries vendored in pip **MUST** be reflected in
+  ``pip/_vendor/vendor.txt``.
+* Vendored libraries **MUST** function without any build steps such as ``2to3``
+  or compilation of C code, practically this limits to single source 2.x/3.x and
+  pure Python.
+* Any modifications made to libraries **MUST** be noted in
+  ``pip/_vendor/README.rst`` and their corresponding patches **MUST** be
+  included ``tools/vendoring/patches``.
+* Vendored libraries should have corresponding ``vendored()`` entries in
+  ``pip/_vendor/__init__.py``.
+
+Rationale
+=========
+
+Historically pip has not had any dependencies except for ``setuptools`` itself,
+choosing instead to implement any functionality it needed to prevent needing
+a dependency. However, starting with pip 1.5, we began to replace code that was
+implemented inside of pip with reusable libraries from PyPI. This brought the
+typical benefits of reusing libraries instead of reinventing the wheel like
+higher quality and more battle tested code, centralization of bug fixes
+(particularly security sensitive ones), and better/more features for less work.
+
+However, there are several issues with having dependencies in the traditional
+way (via ``install_requires``) for pip. These issues are:
+
+**Fragility**
+   When pip depends on another library to function then if for whatever reason
+   that library either isn't installed or an incompatible version is installed
+   then pip ceases to function. This is of course true for all Python
+   applications, however for every application *except* for pip the way you fix
+   it is by re-running pip. Obviously, when pip can't run, you can't use pip to
+   fix pip, so you're left having to manually resolve dependencies and
+   installing them by hand.
+
+**Making other libraries uninstallable**
+   One of pip's current dependencies is the ``requests`` library, for which pip
+   requires a fairly recent version to run.  If pip depended on ``requests`` in
+   the traditional manner, then we'd either have to maintain compatibility with
+   every ``requests`` version that has ever existed (and ever will), OR allow
+   pip to render certain versions of ``requests`` uninstallable. (The second
+   issue, although technically true for any Python application, is magnified by
+   pip's ubiquity; pip is installed by default in Python, in ``pyvenv``, and in
+   ``virtualenv``.)
+
+**Security**
+   This might seem puzzling at first glance, since vendoring has a tendency to
+   complicate updating dependencies for security updates, and that holds true
+   for pip. However, given the *other* reasons for avoiding dependencies, the
+   alternative is for pip to reinvent the wheel itself.  This is what pip did
+   historically. It forced pip to re-implement its own HTTPS verification
+   routines as a workaround for the Python standard library's lack of SSL
+   validation, which resulted in similar bugs in the validation routine in
+   ``requests`` and ``urllib3``, except that they had to be discovered and
+   fixed independently. Even though we're vendoring, reusing libraries keeps
+   pip more secure by relying on the great work of our dependencies, *and*
+   allowing for faster, easier security fixes by simply pulling in newer
+   versions of dependencies.
+
+**Bootstrapping**
+   Currently most popular methods of installing pip rely on pip's
+   self-contained nature to install pip itself. These tools work by bundling a
+   copy of pip, adding it to ``sys.path``, and then executing that copy of pip.
+   This is done instead of implementing a "mini installer" (to reduce
+   duplication); pip already knows how to install a Python package, and is far
+   more battle-tested than any "mini installer" could ever possibly be.
+
+Many downstream redistributors have policies against this kind of bundling, and
+instead opt to patch the software they distribute to debundle it and make it
+rely on the global versions of the software that they already have packaged
+(which may have its own patches applied to it). We (the pip team) would prefer
+it if pip was *not* debundled in this manner due to the above reasons and
+instead we would prefer it if pip would be left intact as it is now.
+
+In the longer term, if someone has a *portable* solution to the above problems,
+other than the bundling method we currently use, that doesn't add additional
+problems that are unreasonable then we would be happy to consider, and possibly
+switch to said method. This solution must function correctly across all of the
+situation that we expect pip to be used and not mandate some external mechanism
+such as OS packages.
+
+Modifications
+=============
+
+* ``setuptools`` is completely stripped to only keep ``pkg_resources``.
+* ``pkg_resources`` has been modified to import its dependencies from
+  ``pip._vendor``, and to use the vendored copy of ``platformdirs``
+  rather than ``appdirs``.
+* ``packaging`` has been modified to import its dependencies from
+  ``pip._vendor``.
+* ``CacheControl`` has been modified to import its dependencies from
+  ``pip._vendor``.
+* ``requests`` has been modified to import its other dependencies from
+  ``pip._vendor`` and to *not* load ``simplejson`` (all platforms) and
+  ``pyopenssl`` (Windows).
+* ``platformdirs`` has been modified to import its submodules from ``pip._vendor.platformdirs``.
+
+Automatic Vendoring
+===================
+
+Vendoring is automated via the `vendoring <https://pypi.org/project/vendoring/>`_ tool from the content of
+``pip/_vendor/vendor.txt`` and the different patches in
+``tools/vendoring/patches``.
+Launch it via ``vendoring sync . -v`` (requires ``vendoring>=0.2.2``).
+Tool configuration is done via ``pyproject.toml``.
+
+To update the vendored library versions, we have a session defined in ``nox``.
+The command to upgrade everything is::
+
+    nox -s vendoring -- --upgrade-all --skip urllib3 --skip setuptools
+
+At the time of writing (April 2025) we do not upgrade ``urllib3`` because the
+next version is a major upgrade and will be handled as an independent PR. We also
+do not upgrade ``setuptools``, because we only rely on ``pkg_resources``, and
+tracking every ``setuptools`` change is unnecessary for our needs.
+
+Managing Local Patches
+======================
+
+The ``vendoring`` tool automatically applies our local patches, but updating,
+the patches sometimes no longer apply cleanly. In that case, the update will
+fail. To resolve this, take the following steps:
+
+1. Revert any incomplete changes in the revendoring branch, to ensure you have
+   a clean starting point.
+2. Run the revendoring of the library with a problem again: ``nox -s vendoring
+   -- --upgrade <library_name>``.
+3. This will fail again, but you will have the original source in your working
+   directory. Review the existing patch against the source, and modify the patch
+   to reflect the new version of the source. If you ``git add`` the changes the
+   vendoring made, you can modify the source to reflect the patch file and then
+   generate a new patch with ``git diff``.
+4. Now, revert everything *except* the patch file changes. Leave the modified
+   patch file unstaged but saved in the working tree.
+5. Re-run the vendoring. This time, it should pick up the changed patch file
+   and apply it cleanly. The patch file changes will be committed along with the
+   revendoring, so the new commit should be ready to test and publish as a PR.
+
+Debundling
+==========
+
+As mentioned in the rationale, we, the pip team, would prefer it if pip was not
+debundled (other than optionally ``pip/_vendor/requests/cacert.pem``) and that
+pip was left intact. However, if you insist on doing so, we have a
+semi-supported method (that we don't test in our CI) and requires a bit of
+extra work on your end in order to solve the problems described above.
+
+1. Delete everything in ``pip/_vendor/`` **except** for
+   ``pip/_vendor/__init__.py`` and ``pip/_vendor/vendor.txt``.
+2. Generate wheels for each of pip's dependencies (and any of their
+   dependencies) using your patched copies of these libraries. These must be
+   placed somewhere on the filesystem that pip can access (``pip/_vendor`` is
+   the default assumption).
+3. Modify ``pip/_vendor/__init__.py`` so that the ``DEBUNDLED`` variable is
+   ``True``.
+4. Upon installation, the ``INSTALLER`` file in pip's own ``dist-info``
+   directory should be set to something other than ``pip``, so that pip
+   can detect that it wasn't installed using itself.
+5. *(optional)* If you've placed the wheels in a location other than
+   ``pip/_vendor/``, then modify ``pip/_vendor/__init__.py`` so that the
+   ``WHEEL_DIR`` variable points to the location you've placed them.
+6. *(optional)* Update the ``pip_self_version_check`` logic to use the
+   appropriate logic for determining the latest available version of pip and
+   prompt the user with the correct upgrade message.
+
+Note that partial debundling is **NOT** supported. You need to prepare wheels
+for all dependencies for successful debundling.
+
+
+BSD 3-Clause License
+
+Copyright (c) 2013-2025, Kim Davies and contributors.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+BSD 3-Clause License
+
+Copyright (c) 2013-2025, Kim Davies and contributors.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+================
+Vendoring Policy
+================
+
+* Vendored libraries **MUST** not be modified except as required to
+  successfully vendor them.
+* Vendored libraries **MUST** be released copies of libraries available on
+  PyPI.
+* Vendored libraries **MUST** be available under a license that allows
+  them to be integrated into ``pip``, which is released under the MIT license.
+* Vendored libraries **MUST** be accompanied with LICENSE files.
+* The versions of libraries vendored in pip **MUST** be reflected in
+  ``pip/_vendor/vendor.txt``.
+* Vendored libraries **MUST** function without any build steps such as ``2to3``
+  or compilation of C code, practically this limits to single source 2.x/3.x and
+  pure Python.
+* Any modifications made to libraries **MUST** be noted in
+  ``pip/_vendor/README.rst`` and their corresponding patches **MUST** be
+  included ``tools/vendoring/patches``.
+* Vendored libraries should have corresponding ``vendored()`` entries in
+  ``pip/_vendor/__init__.py``.
+
+Rationale
+=========
+
+Historically pip has not had any dependencies except for ``setuptools`` itself,
+choosing instead to implement any functionality it needed to prevent needing
+a dependency. However, starting with pip 1.5, we began to replace code that was
+implemented inside of pip with reusable libraries from PyPI. This brought the
+typical benefits of reusing libraries instead of reinventing the wheel like
+higher quality and more battle tested code, centralization of bug fixes
+(particularly security sensitive ones), and better/more features for less work.
+
+However, there are several issues with having dependencies in the traditional
+way (via ``install_requires``) for pip. These issues are:
+
+**Fragility**
+   When pip depends on another library to function then if for whatever reason
+   that library either isn't installed or an incompatible version is installed
+   then pip ceases to function. This is of course true for all Python
+   applications, however for every application *except* for pip the way you fix
+   it is by re-running pip. Obviously, when pip can't run, you can't use pip to
+   fix pip, so you're left having to manually resolve dependencies and
+   installing them by hand.
+
+**Making other libraries uninstallable**
+   One of pip's current dependencies is the ``requests`` library, for which pip
+   requires a fairly recent version to run.  If pip depended on ``requests`` in
+   the traditional manner, then we'd either have to maintain compatibility with
+   every ``requests`` version that has ever existed (and ever will), OR allow
+   pip to render certain versions of ``requests`` uninstallable. (The second
+   issue, although technically true for any Python application, is magnified by
+   pip's ubiquity; pip is installed by default in Python, in ``pyvenv``, and in
+   ``virtualenv``.)
+
+**Security**
+   This might seem puzzling at first glance, since vendoring has a tendency to
+   complicate updating dependencies for security updates, and that holds true
+   for pip. However, given the *other* reasons for avoiding dependencies, the
+   alternative is for pip to reinvent the wheel itself.  This is what pip did
+   historically. It forced pip to re-implement its own HTTPS verification
+   routines as a workaround for the Python standard library's lack of SSL
+   validation, which resulted in similar bugs in the validation routine in
+   ``requests`` and ``urllib3``, except that they had to be discovered and
+   fixed independently. Even though we're vendoring, reusing libraries keeps
+   pip more secure by relying on the great work of our dependencies, *and*
+   allowing for faster, easier security fixes by simply pulling in newer
+   versions of dependencies.
+
+**Bootstrapping**
+   Currently most popular methods of installing pip rely on pip's
+   self-contained nature to install pip itself. These tools work by bundling a
+   copy of pip, adding it to ``sys.path``, and then executing that copy of pip.
+   This is done instead of implementing a "mini installer" (to reduce
+   duplication); pip already knows how to install a Python package, and is far
+   more battle-tested than any "mini installer" could ever possibly be.
+
+Many downstream redistributors have policies against this kind of bundling, and
+instead opt to patch the software they distribute to debundle it and make it
+rely on the global versions of the software that they already have packaged
+(which may have its own patches applied to it). We (the pip team) would prefer
+it if pip was *not* debundled in this manner due to the above reasons and
+instead we would prefer it if pip would be left intact as it is now.
+
+In the longer term, if someone has a *portable* solution to the above problems,
+other than the bundling method we currently use, that doesn't add additional
+problems that are unreasonable then we would be happy to consider, and possibly
+switch to said method. This solution must function correctly across all of the
+situation that we expect pip to be used and not mandate some external mechanism
+such as OS packages.
+
+Modifications
+=============
+
+* ``setuptools`` is completely stripped to only keep ``pkg_resources``.
+* ``pkg_resources`` has been modified to import its dependencies from
+  ``pip._vendor``, and to use the vendored copy of ``platformdirs``
+  rather than ``appdirs``.
+* ``packaging`` has been modified to import its dependencies from
+  ``pip._vendor``.
+* ``CacheControl`` has been modified to import its dependencies from
+  ``pip._vendor``.
+* ``requests`` has been modified to import its other dependencies from
+  ``pip._vendor`` and to *not* load ``simplejson`` (all platforms) and
+  ``pyopenssl`` (Windows).
+* ``platformdirs`` has been modified to import its submodules from ``pip._vendor.platformdirs``.
+
+Automatic Vendoring
+===================
+
+Vendoring is automated via the `vendoring <https://pypi.org/project/vendoring/>`_ tool from the content of
+``pip/_vendor/vendor.txt`` and the different patches in
+``tools/vendoring/patches``.
+Launch it via ``vendoring sync . -v`` (requires ``vendoring>=0.2.2``).
+Tool configuration is done via ``pyproject.toml``.
+
+To update the vendored library versions, we have a session defined in ``nox``.
+The command to upgrade everything is::
+
+    nox -s vendoring -- --upgrade-all --skip urllib3 --skip setuptools
+
+At the time of writing (April 2025) we do not upgrade ``urllib3`` because the
+next version is a major upgrade and will be handled as an independent PR. We also
+do not upgrade ``setuptools``, because we only rely on ``pkg_resources``, and
+tracking every ``setuptools`` change is unnecessary for our needs.
+
+Managing Local Patches
+======================
+
+The ``vendoring`` tool automatically applies our local patches, but updating,
+the patches sometimes no longer apply cleanly. In that case, the update will
+fail. To resolve this, take the following steps:
+
+1. Revert any incomplete changes in the revendoring branch, to ensure you have
+   a clean starting point.
+2. Run the revendoring of the library with a problem again: ``nox -s vendoring
+   -- --upgrade <library_name>``.
+3. This will fail again, but you will have the original source in your working
+   directory. Review the existing patch against the source, and modify the patch
+   to reflect the new version of the source. If you ``git add`` the changes the
+   vendoring made, you can modify the source to reflect the patch file and then
+   generate a new patch with ``git diff``.
+4. Now, revert everything *except* the patch file changes. Leave the modified
+   patch file unstaged but saved in the working tree.
+5. Re-run the vendoring. This time, it should pick up the changed patch file
+   and apply it cleanly. The patch file changes will be committed along with the
+   revendoring, so the new commit should be ready to test and publish as a PR.
+
+Debundling
+==========
+
+As mentioned in the rationale, we, the pip team, would prefer it if pip was not
+debundled (other than optionally ``pip/_vendor/requests/cacert.pem``) and that
+pip was left intact. However, if you insist on doing so, we have a
+semi-supported method (that we don't test in our CI) and requires a bit of
+extra work on your end in order to solve the problems described above.
+
+1. Delete everything in ``pip/_vendor/`` **except** for
+   ``pip/_vendor/__init__.py`` and ``pip/_vendor/vendor.txt``.
+2. Generate wheels for each of pip's dependencies (and any of their
+   dependencies) using your patched copies of these libraries. These must be
+   placed somewhere on the filesystem that pip can access (``pip/_vendor`` is
+   the default assumption).
+3. Modify ``pip/_vendor/__init__.py`` so that the ``DEBUNDLED`` variable is
+   ``True``.
+4. Upon installation, the ``INSTALLER`` file in pip's own ``dist-info``
+   directory should be set to something other than ``pip``, so that pip
+   can detect that it wasn't installed using itself.
+5. *(optional)* If you've placed the wheels in a location other than
+   ``pip/_vendor/``, then modify ``pip/_vendor/__init__.py`` so that the
+   ``WHEEL_DIR`` variable points to the location you've placed them.
+6. *(optional)* Update the ``pip_self_version_check`` logic to use the
+   appropriate logic for determining the latest available version of pip and
+   prompt the user with the correct upgrade message.
+
+Note that partial debundling is **NOT** supported. You need to prepare wheels
+for all dependencies for successful debundling.
+
+
+BSD 3-Clause License
+
+Copyright (c) 2013-2025, Kim Davies and contributors.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+BSD 3-Clause License
+
+Copyright (c) 2013-2025, Kim Davies and contributors.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+1. Redistributions of source code must retain the above copyright
+   notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright
+   notice, this list of conditions and the following disclaimer in the
+   documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED
+TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+---
+title: aihub Documentation
+---
+
+# aihub
+
+Инструменты для загрузки открытых AI-моделей на локальный диск и синхронизации в S3-хранилище.
+
+```{toctree}
+:maxdepth: 2
+:caption: Documentation
+
+../../README
+../GUIDES
+../compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown
+```
+
+---
+
+:::{note}
+**For AI agents:** This documentation generates `llms.txt` and `llms-full.txt` at build time.
+Use them for efficient navigation: `docs/sphinx/_build/html/llms.txt`
+:::
+

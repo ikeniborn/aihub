@@ -1,0 +1,50 @@
+---
+# Component: Shared Utilities
+# Generated: 2026-02-20
+
+id: utils
+name: Shared Utilities
+layer: business
+path: scripts/utils.py
+type: module
+
+description: >
+  Shared helper functions imported by all three CLI scripts via sys.path insertion.
+  Acts as the single source of truth for credential loading and size formatting.
+  Has no internal dependencies and only depends on PyYAML externally.
+
+public_api:
+  - signature: "fmt_size(n: Union[int, float]) -> str"
+    description: >
+      Formats a byte count into a human-readable string (e.g. 4.2 GB).
+      Iterates through B, KB, MB, GB, TB units dividing by 1024.
+      Returns '-' for falsy (zero/None) input.
+
+  - signature: "load_hf_token(creds_path: Path) -> Optional[str]"
+    description: >
+      Loads HuggingFace API token from credentials.yaml (huggingface.token key)
+      with fallback to the HF_TOKEN environment variable.
+      credentials.yaml takes priority over the environment.
+      Returns None if no token is found in either location.
+
+dependencies:
+  internal: []
+  external:
+    - name: PyYAML
+      import: yaml
+      usage: yaml.safe_load() for parsing credentials.yaml
+    - name: os
+      stdlib: true
+      usage: os.environ.get() for HF_TOKEN fallback
+    - name: pathlib.Path
+      stdlib: true
+      usage: type hint and is_file() check
+
+consumers:
+  - download-models
+  - browse-models
+  - model-browser
+
+notes:
+  - "All three scripts insert scripts/ into sys.path before importing utils"
+  - "fmt_size is also reimplemented in JavaScript inside model_browser.py HTML (fmtSize)"

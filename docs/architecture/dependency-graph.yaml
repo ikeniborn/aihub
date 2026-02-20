@@ -1,0 +1,78 @@
+---
+# Dependency Graph — aihub
+# Generated: 2026-02-20
+
+nodes:
+  - id: utils
+    label: "utils.py\nShared Utilities"
+    type: module
+    layer: business
+
+  - id: download-models
+    label: "download_models.py\nModel Downloader"
+    type: script
+    layer: presentation
+
+  - id: browse-models
+    label: "browse_models.py\nHF Hub Browser"
+    type: script
+    layer: presentation
+
+  - id: model-browser
+    label: "model_browser.py\nWeb UI"
+    type: script
+    layer: presentation
+
+  - id: models-config
+    label: "models.yaml\nModel List Config"
+    type: config
+    layer: data
+
+  - id: credentials-config
+    label: "credentials.yaml + .env\nCredentials Config"
+    type: config
+    layer: data
+
+edges:
+  - from: download-models
+    to: utils
+    type: required
+    description: "imports fmt_size, load_hf_token via sys.path"
+
+  - from: download-models
+    to: models-config
+    type: required
+    description: "reads model list and global settings (load_config)"
+
+  - from: download-models
+    to: credentials-config
+    type: required
+    description: "reads HF token and S3 credentials (load_credentials)"
+
+  - from: browse-models
+    to: utils
+    type: required
+    description: "imports load_hf_token via sys.path"
+
+  - from: browse-models
+    to: credentials-config
+    type: required
+    description: "reads HF token for HuggingFace API authentication"
+
+  - from: model-browser
+    to: utils
+    type: required
+    description: "imports fmt_size for disk size display in API response"
+
+  - from: model-browser
+    to: models-config
+    type: required
+    description: "reads (GET /api/models) and writes (POST /api/save) atomically"
+
+statistics:
+  node_count: 6
+  edge_count: 7
+  max_depth: 2
+  circular_dependencies: none
+  most_depended_on: utils  # 3 incoming edges
+  most_dependencies: download-models  # 3 outgoing edges

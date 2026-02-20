@@ -1,0 +1,850 @@
+<!doctype html>
+<html class="no-js" lang="en" data-content_root="../">
+  <head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Dependency Graph — aihub" href="architecture/diagrams/dependency-graph.html"><link rel="prev" title="aihub" href="../README.html">
+
+    <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
+        <title>Руководство пользователя aihub - aihub Documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
+    
+    
+
+
+<style>
+  body {
+    --color-code-background: #f2f2f2;
+  --color-code-foreground: #1e1e1e;
+  
+  }
+  @media not print {
+    body[data-theme="dark"] {
+      --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+    }
+    @media (prefers-color-scheme: dark) {
+      body:not([data-theme="light"]) {
+        --color-code-background: #202020;
+  --color-code-foreground: #d0d0d0;
+  
+      }
+    }
+  }
+</style></head>
+  <body>
+    
+    <script>
+      document.body.dataset.theme = localStorage.getItem("theme") || "auto";
+    </script>
+    
+
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;">
+  <symbol id="svg-toc" viewBox="0 0 24 24">
+    <title>Contents</title>
+    <svg stroke="currentColor" fill="currentColor" stroke-width="0" viewBox="0 0 1024 1024">
+      <path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 0 0 0 13.8z"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-menu" viewBox="0 0 24 24">
+    <title>Menu</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-menu">
+      <line x1="3" y1="12" x2="21" y2="12"></line>
+      <line x1="3" y1="6" x2="21" y2="6"></line>
+      <line x1="3" y1="18" x2="21" y2="18"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-arrow-right" viewBox="0 0 24 24">
+    <title>Expand</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather-chevron-right">
+      <polyline points="9 18 15 12 9 6"></polyline>
+    </svg>
+  </symbol>
+  <symbol id="svg-sun" viewBox="0 0 24 24">
+    <title>Light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="feather-sun">
+      <circle cx="12" cy="12" r="5"></circle>
+      <line x1="12" y1="1" x2="12" y2="3"></line>
+      <line x1="12" y1="21" x2="12" y2="23"></line>
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+      <line x1="1" y1="12" x2="3" y2="12"></line>
+      <line x1="21" y1="12" x2="23" y2="12"></line>
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon" viewBox="0 0 24 24">
+    <title>Dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-moon">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454z" />
+    </svg>
+  </symbol>
+  <symbol id="svg-sun-with-moon" viewBox="0 0 24 24">
+    <title>Auto light/dark, in light mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path style="opacity: 50%" d="M 5.411 14.504 C 5.471 14.504 5.532 14.504 5.591 14.504 C 3.639 16.319 4.383 19.569 6.931 20.352 C 7.693 20.586 8.512 20.551 9.25 20.252 C 8.023 23.207 4.056 23.725 2.11 21.184 C 0.166 18.642 1.702 14.949 4.874 14.536 C 5.051 14.512 5.231 14.5 5.411 14.5 L 5.411 14.504 Z"/>
+      <line x1="14.5" y1="3.25" x2="14.5" y2="1.25"/>
+      <line x1="14.5" y1="15.85" x2="14.5" y2="17.85"/>
+      <line x1="10.044" y1="5.094" x2="8.63" y2="3.68"/>
+      <line x1="19" y1="14.05" x2="20.414" y2="15.464"/>
+      <line x1="8.2" y1="9.55" x2="6.2" y2="9.55"/>
+      <line x1="20.8" y1="9.55" x2="22.8" y2="9.55"/>
+      <line x1="10.044" y1="14.006" x2="8.63" y2="15.42"/>
+      <line x1="19" y1="5.05" x2="20.414" y2="3.636"/>
+      <circle cx="14.5" cy="9.55" r="3.6"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-moon-with-sun" viewBox="0 0 24 24">
+    <title>Auto light/dark, in dark mode</title>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round"
+      class="icon-custom-derived-from-feather-sun-and-tabler-moon">
+      <path d="M 8.282 7.007 C 8.385 7.007 8.494 7.007 8.595 7.007 C 5.18 10.184 6.481 15.869 10.942 17.24 C 12.275 17.648 13.706 17.589 15 17.066 C 12.851 22.236 5.91 23.143 2.505 18.696 C -0.897 14.249 1.791 7.786 7.342 7.063 C 7.652 7.021 7.965 7 8.282 7 L 8.282 7.007 Z"/>
+      <line style="opacity: 50%" x1="18" y1="3.705" x2="18" y2="2.5"/>
+      <line style="opacity: 50%" x1="18" y1="11.295" x2="18" y2="12.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="4.816" x2="14.464" y2="3.964"/>
+      <line style="opacity: 50%" x1="20.711" y1="10.212" x2="21.563" y2="11.063"/>
+      <line style="opacity: 50%" x1="14.205" y1="7.5" x2="13.001" y2="7.5"/>
+      <line style="opacity: 50%" x1="21.795" y1="7.5" x2="23" y2="7.5"/>
+      <line style="opacity: 50%" x1="15.316" y1="10.184" x2="14.464" y2="11.036"/>
+      <line style="opacity: 50%" x1="20.711" y1="4.789" x2="21.563" y2="3.937"/>
+      <circle style="opacity: 50%" cx="18" cy="7.5" r="2.169"/>
+    </svg>
+  </symbol>
+  <symbol id="svg-pencil" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-pencil-code">
+      <path d="M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4" />
+      <path d="M13.5 6.5l4 4" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+  <symbol id="svg-eye" viewBox="0 0 24 24">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      stroke-width="1" stroke-linecap="round" stroke-linejoin="round" class="icon-tabler-eye-code">
+      <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+      <path d="M10 12a2 2 0 1 0 4 0a2 2 0 0 0 -4 0" />
+      <path
+        d="M11.11 17.958c-3.209 -.307 -5.91 -2.293 -8.11 -5.958c2.4 -4 5.4 -6 9 -6c3.6 0 6.6 2 9 6c-.21 .352 -.427 .688 -.647 1.008" />
+      <path d="M20 21l2 -2l-2 -2" />
+      <path d="M17 17l-2 2l2 2" />
+    </svg>
+  </symbol>
+</svg>
+
+<input type="checkbox" class="sidebar-toggle" name="__navigation" id="__navigation" aria-label="Toggle site navigation sidebar">
+<input type="checkbox" class="sidebar-toggle" name="__toc" id="__toc" aria-label="Toggle table of contents sidebar">
+<label class="overlay sidebar-overlay" for="__navigation"></label>
+<label class="overlay toc-overlay" for="__toc"></label>
+
+<a class="skip-to-content muted-link" href="#furo-main-content">Skip to content</a>
+
+
+
+<div class="page">
+  <header class="mobile-header">
+    <div class="header-left">
+      <label class="nav-overlay-icon" for="__navigation">
+        <span class="icon"><svg><use href="#svg-menu"></use></svg></span>
+      </label>
+    </div>
+    <div class="header-center">
+      <a href="sphinx/index.html"><div class="brand">aihub Documentation</div></a>
+    </div>
+    <div class="header-right">
+      <div class="theme-toggle-container theme-toggle-header">
+        <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+          <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+          <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+          <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+          <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+        </button>
+      </div>
+      <label class="toc-overlay-icon toc-header-icon" for="__toc">
+        <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+      </label>
+    </div>
+  </header>
+  <aside class="sidebar-drawer">
+    <div class="sidebar-container">
+      
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="sphinx/index.html">
+  
+  <span class="sidebar-brand-text">aihub Documentation</span>
+  
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
+  <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
+  <input type="hidden" name="check_keywords" value="yes">
+  <input type="hidden" name="area" value="default">
+</form>
+<div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
+  <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../README.html">aihub</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Руководство пользователя aihub</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/dependency-graph.html">Dependency Graph — aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/data-flow-download.html">Data Flow — Model Download Pipeline</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.html">Полное руководство по локальным AI-моделям в 2025–2026</a></li>
+</ul>
+
+</div>
+</div>
+
+      </div>
+      
+    </div>
+  </aside>
+  <div class="main">
+    <div class="content">
+      <div class="article-container">
+        <a href="#" class="back-to-top muted-link">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8v12z"></path>
+          </svg>
+          <span>Back to top</span>
+        </a>
+        <div class="content-icon-container">
+          <div class="view-this-page">
+  <a class="muted-link" href="../_sources/docs/GUIDES.md.txt" title="View this page">
+    <svg><use href="#svg-eye"></use></svg>
+    <span class="visually-hidden">View this page</span>
+  </a>
+</div>
+<div class="theme-toggle-container theme-toggle-content">
+            <button class="theme-toggle" aria-label="Toggle Light / Dark / Auto color theme">
+              <svg class="theme-icon-when-auto-light"><use href="#svg-sun-with-moon"></use></svg>
+              <svg class="theme-icon-when-auto-dark"><use href="#svg-moon-with-sun"></use></svg>
+              <svg class="theme-icon-when-dark"><use href="#svg-moon"></use></svg>
+              <svg class="theme-icon-when-light"><use href="#svg-sun"></use></svg>
+            </button>
+          </div>
+          <label class="toc-overlay-icon toc-content-icon" for="__toc">
+            <span class="icon"><svg><use href="#svg-toc"></use></svg></span>
+          </label>
+        </div>
+        <article role="main" id="furo-main-content">
+          <section id="aihub">
+<h1>Руководство пользователя aihub<a class="headerlink" href="#aihub" title="Link to this heading">¶</a></h1>
+<section id="id1">
+<h2>Содержание<a class="headerlink" href="#id1" title="Link to this heading">¶</a></h2>
+<ol class="arabic simple">
+<li><p><a class="reference internal" href="#id2">Первоначальная настройка</a></p></li>
+<li><p><a class="reference internal" href="#id7">Загрузка моделей</a></p></li>
+<li><p><a class="reference internal" href="#id15">Управление списком через веб-интерфейс</a></p></li>
+<li><p><a class="reference internal" href="#id19">Поиск новых моделей</a></p></li>
+<li><p><a class="reference internal" href="#s3">Синхронизация в S3</a></p></li>
+<li><p><a class="reference internal" href="#id29">Обновление моделей</a></p></li>
+<li><p><a class="reference internal" href="#ci-cd">Работа в CI/CD</a></p></li>
+<li><p><a class="reference internal" href="#id34">Типовые сценарии</a></p></li>
+</ol>
+</section>
+<hr class="docutils" />
+<section id="id2">
+<h2>1. Первоначальная настройка<a class="headerlink" href="#id2" title="Link to this heading">¶</a></h2>
+<section id="id3">
+<h3>Шаг 1 — установить зависимости<a class="headerlink" href="#id3" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>make<span class="w"> </span>setup
+</pre></div>
+</div>
+<p>Команда создаёт изолированное виртуальное окружение <code class="docutils literal notranslate"><span class="pre">.venv</span></code> и устанавливает все зависимости автоматически. Повторный запуск <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">setup</span></code> безопасен.</p>
+<blockquote>
+<div><p>Альтернатива без make: <code class="docutils literal notranslate"><span class="pre">python3</span> <span class="pre">-m</span> <span class="pre">venv</span> <span class="pre">.venv</span> <span class="pre">&amp;&amp;</span> <span class="pre">.venv/bin/pip</span> <span class="pre">install</span> <span class="pre">-r</span> <span class="pre">requirements.txt</span></code></p>
+</div></blockquote>
+</section>
+<section id="id4">
+<h3>Шаг 2 — создать файл секретов<a class="headerlink" href="#id4" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cp<span class="w"> </span>credentials.yaml.example<span class="w"> </span>credentials.yaml
+</pre></div>
+</div>
+<p>Открыть <code class="docutils literal notranslate"><span class="pre">credentials.yaml</span></code> и заполнить:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">huggingface</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">token</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span><span class="w">        </span><span class="c1"># оставить пустым, если не нужны закрытые модели</span>
+
+<span class="nt">s3</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">access_key_id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+<span class="w">  </span><span class="nt">secret_access_key</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;&quot;</span>
+</pre></div>
+</div>
+<p>Токен HuggingFace нужен только для моделей с <code class="docutils literal notranslate"><span class="pre">gated:</span> <span class="pre">true</span></code> (Llama, Gemma и др.).
+Получить токен: <a class="reference external" href="https://huggingface.co/settings/tokens">https://huggingface.co/settings/tokens</a></p>
+</section>
+<section id="id5">
+<h3>Шаг 3 — создать файл параметров<a class="headerlink" href="#id5" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+</pre></div>
+</div>
+<p>Минимальная конфигурация для локального использования без S3:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">HF_HUB_ENABLE_HF_TRANSFER</span><span class="o">=</span><span class="m">1</span><span class="w">   </span><span class="c1"># ускоренные загрузки (рекомендуется)</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h3>Шаг 4 — проверить конфигурацию<a class="headerlink" href="#id6" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--list
+</pre></div>
+</div>
+<p>Должна вывестись таблица моделей из <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code>. Если вывод появился — настройка выполнена корректно.</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id7">
+<h2>2. Загрузка моделей<a class="headerlink" href="#id7" title="Link to this heading">¶</a></h2>
+<section id="id8">
+<h3>Просмотр доступных моделей<a class="headerlink" href="#id8" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--list
+</pre></div>
+</div>
+<p>Колонки: <code class="docutils literal notranslate"><span class="pre">STATUS</span></code> (enabled/disabled), <code class="docutils literal notranslate"><span class="pre">REPO_ID</span> <span class="pre">/</span> <span class="pre">FILENAME</span></code>, <code class="docutils literal notranslate"><span class="pre">TAGS</span></code>, <code class="docutils literal notranslate"><span class="pre">VRAM</span></code>, <code class="docutils literal notranslate"><span class="pre">DESCRIPTION</span></code>.</p>
+</section>
+<section id="id9">
+<h3>Проверка без загрузки<a class="headerlink" href="#id9" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--dry-run
+</pre></div>
+</div>
+<p>Скрипт проверяет доступность репозиториев на HuggingFace без скачивания файлов. Выводит те же статусы, что и при реальной загрузке.</p>
+</section>
+<section id="id10">
+<h3>Загрузить все включённые модели<a class="headerlink" href="#id10" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py
+</pre></div>
+</div>
+<p>Модели сохраняются в <code class="docutils literal notranslate"><span class="pre">./models/{dest_dir}/{filename}</span></code>.
+Уже скачанные файлы с актуальным ETag <strong>пропускаются автоматически</strong>.</p>
+</section>
+<section id="id11">
+<h3>Загрузить конкретную модель<a class="headerlink" href="#id11" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># по подстроке в repo_id или filename</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>Phi-4
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>Qwen2.5-14B
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>bge-m3
+</pre></div>
+</div>
+</section>
+<section id="id12">
+<h3>Загрузить модели по категории<a class="headerlink" href="#id12" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--tag<span class="w"> </span>russian<span class="w">       </span><span class="c1"># русскоязычные</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--tag<span class="w"> </span>embeddings<span class="w">    </span><span class="c1"># эмбеддинги для RAG</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--tag<span class="w"> </span>reasoning<span class="w">     </span><span class="c1"># reasoning-модели</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--tag<span class="w"> </span>code<span class="w">          </span><span class="c1"># модели для кода</span>
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h3>Включить отключённые модели<a class="headerlink" href="#id13" title="Link to this heading">¶</a></h3>
+<p>Модели с <code class="docutils literal notranslate"><span class="pre">enabled:</span> <span class="pre">false</span></code> в <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code> пропускаются по умолчанию.
+Чтобы загрузить конкретную отключённую модель:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--include-disabled<span class="w"> </span>--model<span class="w"> </span>Qwen2.5-32B
+</pre></div>
+</div>
+</section>
+<section id="id14">
+<h3>Принудительная перезагрузка<a class="headerlink" href="#id14" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># перезагрузить все модели, игнорируя ETag</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--force
+
+<span class="c1"># перезагрузить одну модель</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--force<span class="w"> </span>--model<span class="w"> </span>DeepSeek-R1
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id15">
+<h2>3. Управление списком через веб-интерфейс<a class="headerlink" href="#id15" title="Link to this heading">¶</a></h2>
+<section id="id16">
+<h3>Запуск<a class="headerlink" href="#id16" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/model_browser.py
+</pre></div>
+</div>
+<p>Открыть в браузере: <a class="reference external" href="http://localhost:9000">http://localhost:9000</a></p>
+<p>Для доступа с другого хоста в локальной сети:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/model_browser.py<span class="w"> </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span>--port<span class="w"> </span><span class="m">9000</span>
+</pre></div>
+</div>
+</section>
+<section id="id17">
+<h3>Что можно сделать в интерфейсе<a class="headerlink" href="#id17" title="Link to this heading">¶</a></h3>
+<p><strong>Просмотр:</strong></p>
+<ul class="simple">
+<li><p>Таблица всех моделей из <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code></p></li>
+<li><p>Зелёная точка — файл скачан, серая — не скачан</p></li>
+<li><p>Тусклая строка — модель отключена (<code class="docutils literal notranslate"><span class="pre">enabled:</span> <span class="pre">false</span></code>)</p></li>
+<li><p>Реальный размер файла на диске</p></li>
+</ul>
+<p><strong>Фильтрация:</strong></p>
+<ul class="simple">
+<li><p>Поле поиска — substring по <code class="docutils literal notranslate"><span class="pre">repo_id</span></code>, <code class="docutils literal notranslate"><span class="pre">filename</span></code>, <code class="docutils literal notranslate"><span class="pre">description</span></code></p></li>
+<li><p>Кнопки-теги — фильтр по категориям</p></li>
+<li><p>Переключатель «только скачанные»</p></li>
+</ul>
+<p><strong>Редактирование:</strong></p>
+<ol class="arabic simple">
+<li><p>Поставить или снять чекбокс <code class="docutils literal notranslate"><span class="pre">enabled</span></code> у нужных моделей</p></li>
+<li><p>Нажать <strong>Сохранить</strong> — <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code> обновится атомарно</p></li>
+</ol>
+</section>
+<section id="id18">
+<h3>Добавить другой конфиг<a class="headerlink" href="#id18" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/model_browser.py<span class="w"> </span>--config<span class="w"> </span>/path/to/custom.yaml
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id19">
+<h2>4. Поиск новых моделей<a class="headerlink" href="#id19" title="Link to this heading">¶</a></h2>
+<section id="id20">
+<h3>Поиск по ключевому слову<a class="headerlink" href="#id20" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;llama&quot;</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;embedding russian&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id21">
+<h3>Поиск по автору<a class="headerlink" href="#id21" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>bartowski
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>unsloth
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>Qwen
+</pre></div>
+</div>
+</section>
+<section id="regex">
+<h3>Поиск с regex-фильтром по имени модели<a class="headerlink" href="#regex" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># только модели с 14B в названии</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>bartowski<span class="w"> </span>--regex<span class="w"> </span><span class="s2">&quot;.*14B.*&quot;</span>
+
+<span class="c1"># только Q4_K_M квантизации</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;instruct&quot;</span><span class="w"> </span>--regex<span class="w"> </span><span class="s2">&quot;.*Q4_K_M.*&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="id22">
+<h3>Просмотр файлов в репозитории<a class="headerlink" href="#id22" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># показать все файлы репозиториев</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>bartowski<span class="w"> </span>--show-files
+
+<span class="c1"># только gguf-файлы с regex-фильтром</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--author<span class="w"> </span>bartowski<span class="w"> </span>--file-regex<span class="w"> </span><span class="s2">&quot;Q4_K_M\.gguf</span>$<span class="s2">&quot;</span>
+</pre></div>
+</div>
+</section>
+<section id="yaml-models-yaml">
+<h3>Получить YAML для вставки в models.yaml<a class="headerlink" href="#yaml-models-yaml" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># найти и сформировать записи</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--author<span class="w"> </span>bartowski<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--file-regex<span class="w"> </span><span class="s2">&quot;Q4_K_M\.gguf</span>$<span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--yaml
+</pre></div>
+</div>
+<p>Вывод скопировать в раздел <code class="docutils literal notranslate"><span class="pre">models:</span></code> файла <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code>.
+После вставки заполнить поля <code class="docutils literal notranslate"><span class="pre">dest_dir</span></code>, <code class="docutils literal notranslate"><span class="pre">tags</span></code>, <code class="docutils literal notranslate"><span class="pre">vram_gb</span></code>, <code class="docutils literal notranslate"><span class="pre">description</span></code> и поставить <code class="docutils literal notranslate"><span class="pre">enabled:</span> <span class="pre">true</span></code>.</p>
+</section>
+<section id="id23">
+<h3>Пример полного цикла: найти → добавить → загрузить<a class="headerlink" href="#id23" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. найти модель</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span>--query<span class="w"> </span><span class="s2">&quot;mistral&quot;</span><span class="w"> </span>--file-regex<span class="w"> </span><span class="s2">&quot;Q4_K_M\.gguf</span>$<span class="s2">&quot;</span><span class="w"> </span>--yaml
+
+<span class="c1"># 2. скопировать нужную запись в models.yaml, заполнить поля</span>
+
+<span class="c1"># 3. проверить</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--dry-run<span class="w"> </span>--model<span class="w"> </span>mistral
+
+<span class="c1"># 4. загрузить</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>mistral
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="s3">
+<h2>5. Синхронизация в S3<a class="headerlink" href="#s3" title="Link to this heading">¶</a></h2>
+<section id="id24">
+<h3>Предварительная настройка<a class="headerlink" href="#id24" title="Link to this heading">¶</a></h3>
+<p>В <code class="docutils literal notranslate"><span class="pre">credentials.yaml</span></code> заполнить секции <code class="docutils literal notranslate"><span class="pre">s3</span></code>:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">s3</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">access_key_id</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;AKIAXXXXXXXXXXXXXXXX&quot;</span>
+<span class="w">  </span><span class="nt">secret_access_key</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;ваш_секрет&quot;</span>
+</pre></div>
+</div>
+<p>В <code class="docutils literal notranslate"><span class="pre">.env</span></code> указать параметры:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">S3_BUCKET</span><span class="o">=</span>my-ai-models
+<span class="nv">S3_REGION</span><span class="o">=</span>us-east-1
+<span class="nv">S3_PREFIX</span><span class="o">=</span>models
+
+<span class="c1"># для Yandex Object Storage:</span>
+<span class="nv">S3_ENDPOINT_URL</span><span class="o">=</span>https://storage.yandexcloud.net
+<span class="nv">S3_REGION</span><span class="o">=</span>ru-central1
+
+<span class="c1"># для MinIO:</span>
+<span class="nv">S3_ENDPOINT_URL</span><span class="o">=</span>http://localhost:9000
+<span class="nv">S3_REGION</span><span class="o">=</span>us-east-1
+</pre></div>
+</div>
+</section>
+<section id="id25">
+<h3>Загрузить локально и отправить в S3<a class="headerlink" href="#id25" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--upload-s3
+</pre></div>
+</div>
+<p>Модели сохраняются на диск <strong>и</strong> копируются в S3.
+Повторный запуск пропускает объекты, уже присутствующие в S3 с совпадающим размером.</p>
+</section>
+<section id="id26">
+<h3>Только в S3 (без постоянного хранения на диске)<a class="headerlink" href="#id26" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--s3-only
+</pre></div>
+</div>
+<p>Файлы скачиваются во временную директорию, загружаются в S3, затем удаляются.
+Временная директория удаляется автоматически даже при прерывании (<code class="docutils literal notranslate"><span class="pre">Ctrl+C</span></code>).</p>
+</section>
+<section id="id27">
+<h3>Выборочная синхронизация в S3<a class="headerlink" href="#id27" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># только русскоязычные модели</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--upload-s3<span class="w"> </span>--tag<span class="w"> </span>russian
+
+<span class="c1"># принудительно перезалить embeddings</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--upload-s3<span class="w"> </span>--tag<span class="w"> </span>embeddings<span class="w"> </span>--force
+</pre></div>
+</div>
+</section>
+<section id="id28">
+<h3>Структура ключей в S3<a class="headerlink" href="#id28" title="Link to this heading">¶</a></h3>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="p">{</span><span class="n">S3_PREFIX</span><span class="p">}</span><span class="o">/</span><span class="p">{</span><span class="n">dest_dir</span><span class="p">}</span><span class="o">/</span><span class="p">{</span><span class="n">filename</span><span class="p">}</span>
+
+<span class="n">Примеры</span><span class="p">:</span>
+  <span class="n">models</span><span class="o">/</span><span class="n">llm</span><span class="o">/</span><span class="n">qwen</span><span class="o">/</span><span class="n">Qwen2</span><span class="mf">.5</span><span class="o">-</span><span class="mi">14</span><span class="n">B</span><span class="o">-</span><span class="n">Instruct</span><span class="o">-</span><span class="n">Q4_K_M</span><span class="o">.</span><span class="n">gguf</span>
+  <span class="n">models</span><span class="o">/</span><span class="n">embeddings</span><span class="o">/</span><span class="n">bge</span><span class="o">-</span><span class="n">m3</span><span class="o">-</span><span class="n">Q8_0</span><span class="o">.</span><span class="n">gguf</span>
+  <span class="n">models</span><span class="o">/</span><span class="n">llm</span><span class="o">/</span><span class="n">russian</span><span class="o">/</span><span class="n">model</span><span class="o">-</span><span class="n">q4_k</span><span class="o">.</span><span class="n">gguf</span>
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id29">
+<h2>6. Обновление моделей<a class="headerlink" href="#id29" title="Link to this heading">¶</a></h2>
+<section id="id30">
+<h3>Политики обновления<a class="headerlink" href="#id30" title="Link to this heading">¶</a></h3>
+<p>В <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code>:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">settings</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">update_policy</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">etag</span><span class="w">   </span><span class="c1"># рекомендуется</span>
+</pre></div>
+</div>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Политика</p></th>
+<th class="head"><p>Поведение</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">etag</span></code></p></td>
+<td><p>При каждом запуске сравнивает ETag через HTTP HEAD. Перекачивает только если файл изменился на сервере</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">skip</span></code></p></td>
+<td><p>Никогда не перекачивает, если файл есть. Подходит если обновления не нужны</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">always</span></code></p></td>
+<td><p>Всегда перекачивает. Эквивалентно флагу <code class="docutils literal notranslate"><span class="pre">--force</span></code></p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id31">
+<h3>Проверить и обновить все модели<a class="headerlink" href="#id31" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># etag-политика (default) — скачает только изменившиеся</span>
+python<span class="w"> </span>scripts/download_models.py
+
+<span class="c1"># принудительно обновить всё</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--force
+</pre></div>
+</div>
+</section>
+<section id="id32">
+<h3>Настройка задержек<a class="headerlink" href="#id32" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># пауза 2 секунды между моделями, 5 повторов, 10 секунд базовая задержка</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--delay<span class="w"> </span><span class="m">2</span><span class="w"> </span>--retries<span class="w"> </span><span class="m">5</span><span class="w"> </span>--retry-delay<span class="w"> </span><span class="m">10</span>
+</pre></div>
+</div>
+<p>Или в <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code>:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">settings</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">retry_count</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">3</span>
+<span class="w">  </span><span class="nt">retry_delay</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">5.0</span>
+<span class="w">  </span><span class="nt">inter_download_delay</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30</span><span class="w">   </span><span class="c1"># секунд между моделями</span>
+</pre></div>
+</div>
+<p>При HTTP 429 (rate limit) скрипт автоматически ждёт <code class="docutils literal notranslate"><span class="pre">retry_delay</span> <span class="pre">×</span> <span class="pre">10</span></code> секунд перед повтором.</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="ci-cd">
+<h2>7. Работа в CI/CD<a class="headerlink" href="#ci-cd" title="Link to this heading">¶</a></h2>
+<p>В CI/CD окружении файл <code class="docutils literal notranslate"><span class="pre">credentials.yaml</span></code> обычно недоступен — использовать переменные окружения.</p>
+<section id="ci">
+<h3>Переменные окружения для CI<a class="headerlink" href="#ci" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># секреты</span>
+<span class="nv">HF_TOKEN</span><span class="o">=</span>hf_...
+<span class="nv">AWS_ACCESS_KEY_ID</span><span class="o">=</span>...
+<span class="nv">AWS_SECRET_ACCESS_KEY</span><span class="o">=</span>...
+
+<span class="c1"># параметры</span>
+<span class="nv">S3_BUCKET</span><span class="o">=</span>my-ai-models
+<span class="nv">S3_REGION</span><span class="o">=</span>us-east-1
+<span class="nv">S3_PREFIX</span><span class="o">=</span>models
+<span class="nv">S3_ENDPOINT_URL</span><span class="o">=</span>
+<span class="nv">HF_HUB_ENABLE_HF_TRANSFER</span><span class="o">=</span><span class="m">1</span>
+</pre></div>
+</div>
+</section>
+<section id="pipeline-github-actions-gitlab-ci">
+<h3>Пример pipeline (GitHub Actions / GitLab CI)<a class="headerlink" href="#pipeline-github-actions-gitlab-ci" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># установка</span>
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+
+<span class="c1"># только S3 — не занимать место на раннере</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--s3-only
+
+<span class="c1"># или: загрузить артефакты для следующего шага</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--tag<span class="w"> </span>embeddings
+</pre></div>
+</div>
+</section>
+<section id="id33">
+<h3>Использовать альтернативный файл кредов<a class="headerlink" href="#id33" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--creds<span class="w"> </span>/secrets/prod-credentials.yaml
+</pre></div>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id34">
+<h2>8. Типовые сценарии<a class="headerlink" href="#id34" title="Link to this heading">¶</a></h2>
+<section id="id35">
+<h3>Первая загрузка всего набора<a class="headerlink" href="#id35" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>requirements.txt
+cp<span class="w"> </span>credentials.yaml.example<span class="w"> </span>credentials.yaml
+<span class="c1"># заполнить credentials.yaml</span>
+cp<span class="w"> </span>.env.example<span class="w"> </span>.env
+<span class="c1"># заполнить .env (HF_HUB_ENABLE_HF_TRANSFER=1)</span>
+
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--dry-run<span class="w">   </span><span class="c1"># убедиться что всё ок</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w">             </span><span class="c1"># загрузить</span>
+</pre></div>
+</div>
+</section>
+<section id="id36">
+<h3>Добавить новую модель вручную<a class="headerlink" href="#id36" title="Link to this heading">¶</a></h3>
+<ol class="arabic simple">
+<li><p>Найти модель на <a class="reference external" href="https://huggingface.co">https://huggingface.co</a></p></li>
+<li><p>Скопировать <code class="docutils literal notranslate"><span class="pre">repo_id</span></code> (например, <code class="docutils literal notranslate"><span class="pre">bartowski/Phi-4-GGUF</span></code>) и точное имя файла</p></li>
+<li><p>Добавить запись в <code class="docutils literal notranslate"><span class="pre">models.yaml</span></code>:</p></li>
+</ol>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">repo_id</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">bartowski/Phi-4-GGUF</span>
+<span class="w">    </span><span class="nt">filename</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Phi-4-Q4_K_M.gguf</span>
+<span class="w">    </span><span class="nt">dest_dir</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm/phi</span>
+<span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">gated</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">tags</span><span class="p">:</span><span class="w"> </span><span class="p p-Indicator">[</span><span class="nv">llm</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">reasoning</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">code</span><span class="p p-Indicator">,</span><span class="w"> </span><span class="nv">14b</span><span class="p p-Indicator">]</span>
+<span class="w">    </span><span class="nt">vram_gb</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">    </span><span class="nt">description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Phi-4</span><span class="nv"> </span><span class="s">14B</span><span class="nv"> </span><span class="s">—</span><span class="nv"> </span><span class="s">Microsoft,</span><span class="nv"> </span><span class="s">MIT&quot;</span>
+</pre></div>
+</div>
+<ol class="arabic simple" start="4">
+<li><p>Загрузить:</p></li>
+</ol>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>Phi-4
+</pre></div>
+</div>
+</section>
+<section id="id37">
+<h3>Управлять набором через браузер<a class="headerlink" href="#id37" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>scripts/model_browser.py<span class="w">   </span><span class="c1"># открыть http://localhost:9000</span>
+<span class="c1"># включить/отключить модели через чекбоксы → Сохранить</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w">   </span><span class="c1"># загрузить новые включённые</span>
+</pre></div>
+</div>
+</section>
+<section id="id38">
+<h3>Резервное копирование в S3<a class="headerlink" href="#id38" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># скачать и залить всё в S3</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--upload-s3
+
+<span class="c1"># плановое обновление с синхронизацией</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--upload-s3<span class="w"> </span>--delay<span class="w"> </span><span class="m">5</span>
+</pre></div>
+</div>
+</section>
+<section id="id39">
+<h3>Поиск и загрузка модели одной командой<a class="headerlink" href="#id39" title="Link to this heading">¶</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># поиск → YAML → добавить в models.yaml → загрузить</span>
+python<span class="w"> </span>scripts/browse_models.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--author<span class="w"> </span>unsloth<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--file-regex<span class="w"> </span><span class="s2">&quot;Llama.*Q4_K_M\.gguf</span>$<span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--yaml<span class="w"> </span>&gt;&gt;<span class="w"> </span>models_candidates.yaml
+
+<span class="c1"># вручную перенести нужные записи из models_candidates.yaml в models.yaml</span>
+python<span class="w"> </span>scripts/download_models.py<span class="w"> </span>--model<span class="w"> </span>Llama
+</pre></div>
+</div>
+</section>
+</section>
+</section>
+
+        </article>
+      </div>
+      <footer>
+        
+        <div class="related-pages">
+          <a class="next-page" href="architecture/diagrams/dependency-graph.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Dependency Graph — aihub</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
+          <a class="prev-page" href="../README.html">
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+              <div class="page-info">
+                <div class="context">
+                  <span>Previous</span>
+                </div>
+                
+                <div class="title">aihub</div>
+                
+              </div>
+            </a>
+        </div>
+        <div class="bottom-of-page">
+          <div class="left-details">
+            <div class="copyright">
+                Copyright &#169; 
+            </div>
+            Made with <a href="https://www.sphinx-doc.org/">Sphinx</a> and <a class="muted-link" href="https://pradyunsg.me">@pradyunsg</a>'s
+            
+            <a href="https://github.com/pradyunsg/furo">Furo</a>
+            
+          </div>
+          <div class="right-details">
+            
+          </div>
+        </div>
+        
+      </footer>
+    </div>
+    <aside class="toc-drawer">
+      
+      
+      <div class="toc-sticky toc-scroll">
+        <div class="toc-title-container">
+          <span class="toc-title">
+            On this page
+          </span>
+        </div>
+        <div class="toc-tree-container">
+          <div class="toc-tree">
+            <ul>
+<li><a class="reference internal" href="#">Руководство пользователя aihub</a><ul>
+<li><a class="reference internal" href="#id1">Содержание</a></li>
+<li><a class="reference internal" href="#id2">1. Первоначальная настройка</a><ul>
+<li><a class="reference internal" href="#id3">Шаг 1 — установить зависимости</a></li>
+<li><a class="reference internal" href="#id4">Шаг 2 — создать файл секретов</a></li>
+<li><a class="reference internal" href="#id5">Шаг 3 — создать файл параметров</a></li>
+<li><a class="reference internal" href="#id6">Шаг 4 — проверить конфигурацию</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id7">2. Загрузка моделей</a><ul>
+<li><a class="reference internal" href="#id8">Просмотр доступных моделей</a></li>
+<li><a class="reference internal" href="#id9">Проверка без загрузки</a></li>
+<li><a class="reference internal" href="#id10">Загрузить все включённые модели</a></li>
+<li><a class="reference internal" href="#id11">Загрузить конкретную модель</a></li>
+<li><a class="reference internal" href="#id12">Загрузить модели по категории</a></li>
+<li><a class="reference internal" href="#id13">Включить отключённые модели</a></li>
+<li><a class="reference internal" href="#id14">Принудительная перезагрузка</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id15">3. Управление списком через веб-интерфейс</a><ul>
+<li><a class="reference internal" href="#id16">Запуск</a></li>
+<li><a class="reference internal" href="#id17">Что можно сделать в интерфейсе</a></li>
+<li><a class="reference internal" href="#id18">Добавить другой конфиг</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id19">4. Поиск новых моделей</a><ul>
+<li><a class="reference internal" href="#id20">Поиск по ключевому слову</a></li>
+<li><a class="reference internal" href="#id21">Поиск по автору</a></li>
+<li><a class="reference internal" href="#regex">Поиск с regex-фильтром по имени модели</a></li>
+<li><a class="reference internal" href="#id22">Просмотр файлов в репозитории</a></li>
+<li><a class="reference internal" href="#yaml-models-yaml">Получить YAML для вставки в models.yaml</a></li>
+<li><a class="reference internal" href="#id23">Пример полного цикла: найти → добавить → загрузить</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#s3">5. Синхронизация в S3</a><ul>
+<li><a class="reference internal" href="#id24">Предварительная настройка</a></li>
+<li><a class="reference internal" href="#id25">Загрузить локально и отправить в S3</a></li>
+<li><a class="reference internal" href="#id26">Только в S3 (без постоянного хранения на диске)</a></li>
+<li><a class="reference internal" href="#id27">Выборочная синхронизация в S3</a></li>
+<li><a class="reference internal" href="#id28">Структура ключей в S3</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id29">6. Обновление моделей</a><ul>
+<li><a class="reference internal" href="#id30">Политики обновления</a></li>
+<li><a class="reference internal" href="#id31">Проверить и обновить все модели</a></li>
+<li><a class="reference internal" href="#id32">Настройка задержек</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#ci-cd">7. Работа в CI/CD</a><ul>
+<li><a class="reference internal" href="#ci">Переменные окружения для CI</a></li>
+<li><a class="reference internal" href="#pipeline-github-actions-gitlab-ci">Пример pipeline (GitHub Actions / GitLab CI)</a></li>
+<li><a class="reference internal" href="#id33">Использовать альтернативный файл кредов</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#id34">8. Типовые сценарии</a><ul>
+<li><a class="reference internal" href="#id35">Первая загрузка всего набора</a></li>
+<li><a class="reference internal" href="#id36">Добавить новую модель вручную</a></li>
+<li><a class="reference internal" href="#id37">Управлять набором через браузер</a></li>
+<li><a class="reference internal" href="#id38">Резервное копирование в S3</a></li>
+<li><a class="reference internal" href="#id39">Поиск и загрузка модели одной командой</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+          </div>
+        </div>
+      </div>
+      
+      
+    </aside>
+  </div>
+</div><script src="../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
+    </body>
+</html>

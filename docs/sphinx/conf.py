@@ -30,17 +30,31 @@ myst_enable_extensions = [
     "attrs_inline",  # Inline attributes {.class}
 ]
 
+# Generate anchors for all heading levels (fixes cross-reference warnings)
+myst_heading_anchors = 4
+
+# Treat ```mermaid fences as {mermaid} directives
+myst_fence_as_directive = ["mermaid"]
+
 # File formats
 source_suffix = {
     ".rst": "restructuredtext",
     ".md": "markdown",
 }
 
-# Exclude patterns (relative to docs/sphinx/)
+# Exclude patterns (relative to source root = project root)
 exclude_patterns = [
-    "_build",
+    "docs/sphinx/_build",
     "Thumbs.db",
     ".DS_Store",
+    ".venv",
+    "models",
+    "scripts/__pycache__",
+    "**/__pycache__",
+    "*.pyc",
+    "docs/llms.txt",
+    "docs/llms-full.txt",
+    "docs/plans",
 ]
 
 # -- HTML output ---------------------------------------------------------------
@@ -52,6 +66,9 @@ html_theme_options = {
     "sidebar_hide_name": False,
     "navigation_with_keys": True,
 }
+
+# Master document — relative to source directory (project root when built with -c)
+master_doc = "docs/sphinx/index"
 
 # -- sphinx-llms-txt -----------------------------------------------------------
 # AI-first documentation: generates llms.txt and llms-full.txt
