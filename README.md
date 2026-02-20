@@ -128,7 +128,10 @@ models:
 ```
 aihub/
 ├── models.yaml                  # список моделей
-├── requirements.txt
+├── requirements.txt             # зависимости (для совместимости с CI/CD)
+├── pyproject.toml               # конфигурация проекта (PEP 517, uv-совместимый)
+├── Makefile                     # команды: setup, download, browse, ui, list, update
+├── .python-version              # версия Python (3.9)
 ├── credentials.yaml.example     # шаблон секретов
 ├── .env.example                 # шаблон параметров
 ├── scripts/
@@ -138,6 +141,7 @@ aihub/
 │   └── model_browser.py         # веб-интерфейс (порт 9000)
 ├── docs/
 │   └── GUIDES.md                # пошаговое руководство пользователя
+├── .venv/                       # виртуальное окружение (gitignored, создаётся make setup)
 └── models/                      # скачанные модели (gitignored)
 ```
 
