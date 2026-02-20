@@ -340,6 +340,16 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .file-item { display: block; padding: 1px 0; }
   .file-size { color: var(--text-muted); font-size: 0.68rem; margin-left: 6px; font-family: monospace; }
   .downloads { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+
+  /* ── HF result meta (pipeline / likes / description) ── */
+  .cell-hf-meta { font-size: 0.71rem; color: var(--text-muted); margin-top: 5px; line-height: 1.6; }
+  .hf-pipeline-badge {
+    display: inline-block; border-radius: 3px; padding: 1px 6px;
+    font-size: 0.63rem; font-weight: 600; margin-right: 5px; vertical-align: middle;
+    background: #1a2d4a; color: #7dd3fc; border: 1px solid #1e3a5f;
+  }
+  .hf-likes { color: #f9a8d4; margin-right: 6px; }
+  .hf-desc  { color: #8898aa; font-style: italic; }
   .select-cb { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
   #hf-empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; display: none; }
 
@@ -963,18 +973,26 @@ function renderHfResults(results) {
         const tdRepo = document.createElement('td');
         tdRepo.className = 'cell-hf-repo';
         if (rawFiles.length > 1) tdRepo.rowSpan = rawFiles.length;
+        const pipelineBadge = r.pipeline_tag
+          ? `<span class="hf-pipeline-badge">${escHtml(r.pipeline_tag)}</span>` : '';
+        const likesHtml = r.likes > 0
+          ? `<span class="hf-likes">♥ ${fmtNum(r.likes)}</span>` : '';
+        const descHtml = r.description
+          ? `<span class="hf-desc">${escHtml(r.description)}</span>` : '';
         tdRepo.innerHTML =
           `<a href="https://huggingface.co/${escHtml(r.repo_id)}" target="_blank">${escHtml(r.repo_id)}</a>` +
-          (r.gated ? '<span class="gated-badge">GATED</span>' : '');
+          (r.gated ? '<span class="gated-badge">GATED</span>' : '') +
+          (pipelineBadge || likesHtml || descHtml
+            ? `<div class="cell-hf-meta">${pipelineBadge}${likesHtml}${descHtml}</div>` : '');
         tr.appendChild(tdRepo);
       }
 
-      // filename + size
+      // filename + size (size on new line for readability)
       const tdFile = document.createElement('td');
       tdFile.className = 'cell-hf-files';
       if (fname) {
         const sizeHtml = fsize != null
-          ? `<span class="file-size">${fmtSize(fsize)}</span>`
+          ? `<span class="file-size" style="display:block;margin-top:2px">${fmtSize(fsize)}</span>`
           : '';
         tdFile.innerHTML = `<span class="file-item">${escHtml(fname)}${sizeHtml}</span>`;
       } else {
@@ -982,7 +1000,7 @@ function renderHfResults(results) {
       }
       tr.appendChild(tdFile);
 
-      // downloads — только на первой строке
+      // downloads + likes — только на первой строке
       if (fi === 0) {
         const tdDl = document.createElement('td');
         tdDl.className = 'downloads';
@@ -1009,7 +1027,7 @@ function renderHfResults(results) {
 function hfSelectionChange(cb, r, fname) {
   const key = r.repo_id + '||' + (fname || '');
   if (cb.checked) {
-    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [] });
+    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [], description: r.description || '' });
   } else {
     hfSelected.delete(key);
   }
@@ -1029,7 +1047,7 @@ function hfToggleAll(masterCb) {
     const r = hfResults.find(x => x.repo_id === repo_id);
     if (!r) return;
     if (masterCb.checked) {
-      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [] });
+      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [], description: r.description || '' });
     } else {
       hfSelected.delete(key);
     }
@@ -1071,6 +1089,12 @@ function hfShowAddForm() {
   document.getElementById('hf-add-form').style.display = 'block';
   document.getElementById('add-status').className = 'status-msg';
   document.getElementById('add-status').style.display = 'none';
+  // Pre-fill description from first selected item (only if field is empty)
+  const descEl = document.getElementById('add-description');
+  if (!descEl.value.trim()) {
+    const first = hfSelected.values().next().value;
+    if (first && first.description) descEl.value = first.description;
+  }
   document.getElementById('hf-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1368,6 +1392,17 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
 # ─── HuggingFace Search ────────────────────────────────────────────────────────
 
 
+def _sibling_size(s) -> Optional[int]:
+    """Return actual file size: LFS size for LFS-tracked files, blob size otherwise."""
+    lfs = getattr(s, "lfs", None)
+    if lfs is not None:
+        sz = getattr(lfs, "size", None)
+        if sz:
+            return sz
+    sz = getattr(s, "size", None)
+    return sz if sz else None
+
+
 def search_hf(
     query: Optional[str],
     author: Optional[str],
@@ -1403,7 +1438,7 @@ def search_hf(
     kwargs: dict[str, Any] = {
         "limit": fetch_limit,
         "sort": "downloads",
-        "expand": ["siblings"],   # нужно для фильтрации файлов без доп. запросов
+        "expand": ["siblings", "cardData"],  # siblings — файлы; cardData — лицензия
     }
     if query:
         kwargs["search"] = query
@@ -1435,7 +1470,7 @@ def search_hf(
         if compiled_re is not None:
             siblings = m.siblings or []
             files = [
-                {"name": s.rfilename, "size_bytes": getattr(s, "size", None)}
+                {"name": s.rfilename, "size_bytes": _sibling_size(s)}
                 for s in sorted(siblings, key=lambda x: x.rfilename)
                 if compiled_re.search(s.rfilename)
             ]
@@ -1444,22 +1479,44 @@ def search_hf(
         else:
             siblings = m.siblings or []
             files = [
-                {"name": s.rfilename, "size_bytes": getattr(s, "size", None)}
+                {"name": s.rfilename, "size_bytes": _sibling_size(s)}
                 for s in sorted(siblings, key=lambda x: x.rfilename)
                 if s.rfilename.lower().endswith(AI_EXTS)
             ]
 
+        pipeline_val = getattr(m, "pipeline_tag", "") or ""
+        likes = getattr(m, "likes", 0) or 0
+
+        # Tags: keep non-namespaced tags + ensure pipeline_tag is visible
         tags_raw = m.tags or []
-        tags = [t for t in tags_raw if ":" not in t][:8]
+        tags = [t for t in tags_raw if ":" not in t and len(t) <= 25][:6]
+        if pipeline_val and pipeline_val not in tags:
+            tags = [pipeline_val] + tags[:5]
+
+        # License + auto-generated description from model name
+        card = getattr(m, "card_data", None)
+        license_val = ""
+        if card is not None:
+            if isinstance(card, dict):
+                license_val = str(card.get("license", "") or "").strip()
+            else:
+                license_val = str(getattr(card, "license", "") or "").strip()
+        repo_name = m.id.split("/")[-1]
+        clean_name = re.sub(
+            r"[-_]?(?:i\d+[-_]?)?GGUF$", "", repo_name, flags=re.IGNORECASE
+        ).strip("-_ ")
+        description = clean_name + (f" [{license_val}]" if license_val else "")
 
         results.append({
             "repo_id": m.id,
             "downloads": getattr(m, "downloads", 0) or 0,
-            "likes": getattr(m, "likes", 0) or 0,
+            "likes": likes,
             "gated": bool(getattr(m, "gated", False)),
-            "pipeline_tag": getattr(m, "pipeline_tag", "") or "",
+            "pipeline_tag": pipeline_val,
             "tags": tags,
             "files": files,
+            "description": description,
+            "license": license_val,
         })
 
         if len(results) >= limit:

@@ -479,7 +479,6 @@ def download_model(
 
             # If HF placed the file in a cache subdir, copy it to flat dest_dir
             if downloaded.parent != local_dir:
-                import shutil
                 shutil.copy2(str(downloaded), str(local_file))
                 downloaded = local_file
 
