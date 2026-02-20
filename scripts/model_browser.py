@@ -1411,16 +1411,20 @@ def search_hf(
         kwargs["author"] = author
     if pipeline_tag:
         kwargs["pipeline_tag"] = pipeline_tag
-    if language:
-        kwargs["filter"] = language  # язык передаётся как тег-фильтр (ISO 639-1 код)
 
-    # Автоопределение library по file_regex: без этого HF API возвращает топ-N моделей
-    # глобально (BERT, GPT, CLIP…), у которых нет .gguf/.safetensors файлов → 0 результатов.
-    if file_regex and "library" not in kwargs and not query and not author:
+    # Собираем тег-фильтры: язык + автоопределение формата по file_regex.
+    # Без авто-фильтра формата list_models() возвращает топ-N глобально
+    # (BERT, CLIP…) — у них нет .gguf/.safetensors → 0 результатов.
+    _filter_tags: list[str] = []
+    if language:
+        _filter_tags.append(language)
+    if file_regex and not query and not author:
         if re.search(r"\.gguf", file_regex, re.IGNORECASE):
-            kwargs["library"] = "gguf"
+            _filter_tags.append("gguf")
         elif re.search(r"\.safetensors", file_regex, re.IGNORECASE):
-            kwargs["library"] = "safetensors"
+            _filter_tags.append("safetensors")
+    if _filter_tags:
+        kwargs["filter"] = _filter_tags if len(_filter_tags) > 1 else _filter_tags[0]
 
     models = list(api.list_models(**kwargs))
 
@@ -1560,6 +1564,13 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
         print(f"  {self.address_string()} {format % args}")
+
+    def log_error(self, format: str, *args) -> None:  # noqa: A002
+        """Suppress SSL handshake noise (browser sending HTTPS to HTTP server)."""
+        msg = format % args
+        if "Bad request version" in msg or "Bad request syntax" in msg:
+            return  # HTTPS→HTTP mismatch: harmless, no need to show in terminal
+        print(f"  [ERR] {self.address_string()} {msg}", file=sys.stderr)
 
     def _send_json(self, data: Any, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
