@@ -9,17 +9,20 @@
 ## Требования
 
 - Python 3.9+
-- `pip install -r requirements.txt`
+- `make setup` — создаёт `.venv` и устанавливает все зависимости автоматически
+
+> Альтернатива без make: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 
 ---
 
 ## Быстрый старт
 
 ```bash
+make setup                                      # создать .venv и установить зависимости
 cp credentials.yaml.example credentials.yaml   # добавить токены
 cp .env.example .env                            # добавить S3-параметры
-python scripts/download_models.py --dry-run     # проверка без загрузки
-python scripts/download_models.py               # загрузка всех включённых моделей
+make list                                       # показать список моделей
+make download                                   # загрузка всех включённых моделей
 ```
 
 ---

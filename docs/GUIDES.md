@@ -18,8 +18,12 @@
 ### Шаг 1 — установить зависимости
 
 ```bash
-pip install -r requirements.txt
+make setup
 ```
+
+Команда создаёт изолированное виртуальное окружение `.venv` и устанавливает все зависимости автоматически. Повторный запуск `make setup` безопасен.
+
+> Альтернатива без make: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
 
 ### Шаг 2 — создать файл секретов
 
