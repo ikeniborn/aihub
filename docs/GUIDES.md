@@ -138,83 +138,229 @@ python scripts/download_models.py --force --model DeepSeek-R1
 ### Запуск
 
 ```bash
-python scripts/model_browser.py
+make ui                        # http://localhost:9000, открывает браузер автоматически
+make ui PORT=9001              # другой порт
+make ui HOST=0.0.0.0           # доступ из локальной сети
+make ui CONFIG=custom.yaml     # другой конфиг
 ```
 
-Открыть в браузере: <http://localhost:9000>
-
-Для доступа с другого хоста в локальной сети:
+Или напрямую:
 
 ```bash
-python scripts/model_browser.py --host 0.0.0.0 --port 9000
+python scripts/model_browser.py --open
+python scripts/model_browser.py --host 0.0.0.0 --port 9001 --open
 ```
 
-### Что можно сделать в интерфейсе
+Интерфейс содержит две вкладки: **Мои модели** и **Поиск HuggingFace**.
+
+---
+
+### Вкладка «Мои модели»
 
 **Просмотр:**
 - Таблица всех моделей из `models.yaml`
 - Зелёная точка — файл скачан, серая — не скачан
 - Тусклая строка — модель отключена (`enabled: false`)
 - Реальный размер файла на диске
+- Клик по `repo_id` открывает страницу модели на HuggingFace
 
 **Фильтрация:**
 - Поле поиска — substring по `repo_id`, `filename`, `description`
-- Кнопки-теги — фильтр по категориям
+- Кнопки-теги — фильтр по категориям (поддерживается комбинирование)
 - Переключатель «только скачанные»
 
-**Редактирование:**
+**Включение / отключение:**
 1. Поставить или снять чекбокс `enabled` у нужных моделей
 2. Нажать **Сохранить** — `models.yaml` обновится атомарно
 
-### Добавить другой конфиг
+---
 
-```bash
-python scripts/model_browser.py --config /path/to/custom.yaml
-```
+### Вкладка «Поиск HuggingFace»
+
+Позволяет искать модели прямо в интерфейсе и добавлять их в `models.yaml` без редактирования файла вручную.
+
+**Поля поиска:**
+
+| Поле | Что ищет | Пример |
+|------|----------|--------|
+| Запрос | Полнотекстовый поиск по названию | `llama`, `deepseek` |
+| Автор | Фильтр по организации | `bartowski`, `Qwen` |
+| Regex файлов | Фильтр по именам файлов в репо | `Q4_K_M\.gguf$` |
+| Лимит | Макс. кол-во результатов (1–50) | `20` |
+
+**Процесс добавления модели:**
+
+1. Ввести параметры поиска → нажать **Искать**
+2. В таблице результатов отметить нужные файлы чекбоксами
+3. Нажать **Добавить выбранные**
+4. Заполнить форму: `dest_dir`, теги, VRAM, описание
+5. Нажать **Добавить в models.yaml**
+
+> Дубликаты пропускаются автоматически — при повторном добавлении уже существующей модели она будет пропущена, остальные добавятся.
+
+После добавления список в вкладке «Мои модели» обновляется автоматически.
+
+**Пример: найти все Q4_K_M модели от bartowski и добавить выбранные:**
+
+1. Автор: `bartowski`, Regex файлов: `Q4_K_M\.gguf$` → Искать
+2. Выбрать нужные файлы → Добавить выбранные
+3. dest_dir: `llm/llama`, теги: `llm chat 8b`, VRAM: `5` → Добавить в models.yaml
+4. Переключиться на «Мои модели» → убедиться что записи появились
+5. В терминале: `python scripts/download_models.py --model Llama`
 
 ---
 
 ## 4. Поиск новых моделей
 
-### Поиск по ключевому слову
+Поиск доступен двумя способами: через **веб-интерфейс** (вкладка «Поиск HuggingFace», см. раздел 3) или через **командную строку** (`browse_models.py`).
+
+### Фильтры поиска
+
+| Аргумент | Переменная `.env` | Что фильтрует |
+|---|---|---|
+| `--query TEXT` | — | Полнотекстовый поиск по названию и описанию |
+| `--author NAME` | — | Автор или организация |
+| `--pipeline-tag TASK` | `BROWSE_PIPELINE_TAG` | Задача модели (text-generation, text-to-image, …) |
+| `--library LIB` | `BROWSE_LIBRARY` | Формат / библиотека (gguf, safetensors, transformers, …) |
+| `--language LANG` | `BROWSE_LANGUAGE` | Язык модели (ru, en, zh, …) |
+| `--regex PATTERN` | — | Regex по `repo_id` (после API-запроса) |
+| `--file-regex PATTERN` | `BROWSE_FILE_REGEX` | Regex по именам файлов внутри репозитория |
+| `--tags TAG …` | — | Теги HuggingFace |
+| `--limit N` | — | Макс. кол-во результатов (по умолчанию: 20) |
+| `--sort` | — | Сортировка: `downloads` / `likes` / `lastModified` |
+
+Переменные из `.env` задают дефолты — CLI-аргументы всегда имеют приоритет.
+
+---
+
+### Поиск по задаче модели (`--pipeline-tag`)
 
 ```bash
-python scripts/browse_models.py --query "llama"
-python scripts/browse_models.py --query "embedding russian"
+# все LLM для генерации текста
+python scripts/browse_models.py --pipeline-tag text-generation --limit 30
+
+# модели для работы с изображениями
+python scripts/browse_models.py --pipeline-tag text-to-image --library safetensors
+
+# модели распознавания речи
+python scripts/browse_models.py --pipeline-tag automatic-speech-recognition --limit 20
+
+# модели для эмбеддингов / семантического поиска
+python scripts/browse_models.py --pipeline-tag sentence-similarity --file-regex "\.gguf$"
 ```
 
-### Поиск по автору
+Популярные значения `pipeline_tag`:
+
+| Значение | Задача |
+|---|---|
+| `text-generation` | LLM, чат, генерация текста |
+| `text-to-image` | Генерация изображений (Stable Diffusion, FLUX) |
+| `automatic-speech-recognition` | Распознавание речи (Whisper) |
+| `text-to-speech` | Синтез речи |
+| `sentence-similarity` | Эмбеддинги, семантический поиск |
+| `text-classification` | Классификация текста |
+| `translation` | Перевод |
+| `image-classification` | Классификация изображений |
+
+---
+
+### Поиск по формату / библиотеке (`--library`)
 
 ```bash
-python scripts/browse_models.py --author bartowski
-python scripts/browse_models.py --author unsloth
-python scripts/browse_models.py --author Qwen
+# только GGUF-модели
+python scripts/browse_models.py --query "llama" --library gguf
+
+# safetensors (для ComfyUI, A1111)
+python scripts/browse_models.py --pipeline-tag text-to-image --library safetensors
+
+# ONNX-модели
+python scripts/browse_models.py --query "whisper" --library onnx
+
+# модели для transformers
+python scripts/browse_models.py --author mistralai --library transformers
 ```
 
-### Поиск с regex-фильтром по имени модели
+---
+
+### Поиск по языку (`--language`)
 
 ```bash
-# только модели с 14B в названии
-python scripts/browse_models.py --author bartowski --regex ".*14B.*"
+# русскоязычные LLM в формате GGUF
+python scripts/browse_models.py --pipeline-tag text-generation --library gguf --language ru
 
-# только Q4_K_M квантизации
-python scripts/browse_models.py --query "instruct" --regex ".*Q4_K_M.*"
+# китайские модели
+python scripts/browse_models.py --pipeline-tag text-generation --language zh --limit 20
+
+# многоязычные модели от конкретного автора
+python scripts/browse_models.py --author Qwen --language ru
 ```
 
-### Просмотр файлов в репозитории
+---
+
+### Поиск по автору с фильтром размера
+
+HuggingFace API не фильтрует по числу параметров напрямую — используйте `--regex`:
 
 ```bash
-# показать все файлы репозиториев
+# только 14B-модели от bartowski
+python scripts/browse_models.py --author bartowski --regex "14[Bb]"
+
+# 7B и 8B модели
+python scripts/browse_models.py --author unsloth --regex "[78][Bb]"
+
+# модели 32B+
+python scripts/browse_models.py --pipeline-tag text-generation --library gguf --regex "3[2-9][Bb]|[4-9][0-9][Bb]"
+```
+
+---
+
+### Просмотр файлов репозитория
+
+```bash
+# показать все файлы
 python scripts/browse_models.py --author bartowski --show-files
 
-# только gguf-файлы с regex-фильтром
+# только Q4_K_M GGUF
 python scripts/browse_models.py --author bartowski --file-regex "Q4_K_M\.gguf$"
+
+# только safetensors
+python scripts/browse_models.py --pipeline-tag text-to-image --file-regex "\.safetensors$"
 ```
+
+---
+
+### Дефолты поиска через `.env`
+
+Если вы всегда ищете GGUF-модели с Q4_K_M квантизацией, настройте дефолты один раз:
+
+```dotenv
+# .env
+BROWSE_PIPELINE_TAG=text-generation
+BROWSE_LIBRARY=gguf
+BROWSE_FILE_REGEX=Q4_K_M\.gguf$
+```
+
+После этого достаточно указать только что искать:
+
+```bash
+# применяются дефолты из .env: pipeline_tag=text-generation, library=gguf, file_regex=Q4_K_M.gguf$
+python scripts/browse_models.py --author bartowski
+python scripts/browse_models.py --query "deepseek"
+python scripts/browse_models.py --language ru
+```
+
+Переопределить дефолт для одного запроса:
+
+```bash
+# искать safetensors, игнорируя BROWSE_FILE_REGEX из .env
+python scripts/browse_models.py --query "flux" --file-regex "\.safetensors$"
+```
+
+---
 
 ### Получить YAML для вставки в models.yaml
 
 ```bash
-# найти и сформировать записи
 python scripts/browse_models.py \
   --author bartowski \
   --file-regex "Q4_K_M\.gguf$" \
@@ -224,19 +370,44 @@ python scripts/browse_models.py \
 Вывод скопировать в раздел `models:` файла `models.yaml`.
 После вставки заполнить поля `dest_dir`, `tags`, `vram_gb`, `description` и поставить `enabled: true`.
 
-### Пример полного цикла: найти → добавить → загрузить
+---
+
+### Полный цикл через CLI: найти → добавить → загрузить
 
 ```bash
 # 1. найти модель
-python scripts/browse_models.py --query "mistral" --file-regex "Q4_K_M\.gguf$" --yaml
+python scripts/browse_models.py \
+  --pipeline-tag text-generation \
+  --library gguf \
+  --language ru \
+  --file-regex "Q4_K_M\.gguf$" \
+  --yaml
 
-# 2. скопировать нужную запись в models.yaml, заполнить поля
+# 2. скопировать нужные записи в models.yaml, заполнить поля
 
-# 3. проверить
-python scripts/download_models.py --dry-run --model mistral
+# 3. проверить доступность
+python scripts/download_models.py --dry-run --model saiga
 
 # 4. загрузить
-python scripts/download_models.py --model mistral
+python scripts/download_models.py --model saiga
+```
+
+### Полный цикл через веб-интерфейс: найти → добавить → загрузить
+
+```bash
+# запустить браузер
+make ui
+
+# 1. вкладка «Поиск HuggingFace»:
+#    Автор: bartowski, Regex файлов: Q4_K_M\.gguf$ → Искать
+#    выбрать нужные файлы → Добавить выбранные
+#    заполнить форму → Добавить в models.yaml
+
+# 2. вкладка «Мои модели»:
+#    убедиться что модели появились
+
+# 3. в терминале — загрузить новые модели:
+python scripts/download_models.py --model bartowski
 ```
 
 ---
@@ -439,8 +610,9 @@ python scripts/download_models.py --model Phi-4
 ### Управлять набором через браузер
 
 ```bash
-python scripts/model_browser.py   # открыть http://localhost:9000
-# включить/отключить модели через чекбоксы → Сохранить
+make ui   # открывает http://localhost:9000 в браузере автоматически
+# Вкладка «Мои модели»: включить/отключить чекбоксы → Сохранить
+# Вкладка «Поиск HuggingFace»: найти новые → выбрать → добавить в models.yaml
 python scripts/download_models.py   # загрузить новые включённые
 ```
 
@@ -454,7 +626,7 @@ python scripts/download_models.py --upload-s3
 python scripts/download_models.py --upload-s3 --delay 5
 ```
 
-### Поиск и загрузка модели одной командой
+### Поиск и загрузка модели одной командой (CLI)
 
 ```bash
 # поиск → YAML → добавить в models.yaml → загрузить
@@ -465,4 +637,32 @@ python scripts/browse_models.py \
 
 # вручную перенести нужные записи из models_candidates.yaml в models.yaml
 python scripts/download_models.py --model Llama
+```
+
+### Поиск всех русскоязычных LLM в GGUF
+
+```bash
+# все русские text-generation GGUF Q4_K_M
+python scripts/browse_models.py \
+  --pipeline-tag text-generation \
+  --library gguf \
+  --language ru \
+  --file-regex "Q4_K_M\.gguf$" \
+  --yaml
+```
+
+### Подобрать модель для image generation
+
+```bash
+# FLUX и SDXL в safetensors
+python scripts/browse_models.py \
+  --pipeline-tag text-to-image \
+  --library safetensors \
+  --limit 30
+
+# только от конкретных авторов
+python scripts/browse_models.py \
+  --pipeline-tag text-to-image \
+  --author black-forest-labs \
+  --file-regex "\.safetensors$"
 ```

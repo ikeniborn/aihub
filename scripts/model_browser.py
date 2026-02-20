@@ -19,7 +19,7 @@ API:
     POST /api/save                — обновить enabled в models.yaml атомарно
     GET  /api/search?q=&author=&file_regex=&limit=  — поиск на HuggingFace Hub
     POST /api/add                 — добавить модели из результатов поиска в models.yaml
-    GET  /api/download/start      — запустить загрузку enabled моделей в фоновом потоке
+    POST /api/download/start      — запустить загрузку enabled моделей в фоновом потоке
     GET  /api/download/stream     — SSE поток прогресса загрузки (running, current, log, status_map)
     POST /api/download/cancel     — отменить текущую загрузку
 """
@@ -29,7 +29,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import queue
 import re
 import subprocess
 import sys
@@ -39,7 +38,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
 
 import yaml
@@ -343,6 +342,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
     <span class="status-msg" id="save-msg"></span>
     <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" style="margin-left:8px" title="Скачать все enabled модели">Скачать enabled</button>
     <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none">Отменить</button>
+    <span class="status-msg" id="dl-status-msg"></span>
   </div>
   <div class="download-panel" id="download-panel" style="display:none">
     <div class="download-panel-header">
@@ -880,24 +880,30 @@ function setAddStatus(html, isErr) {
 // ═══════════════════════════════════════════════════════════════════
 
 let _dlEventSource = null;
-let _dlLogLines = [];
+let _dlLastData = null;
 
 async function dlStart() {
   const startBtn  = document.getElementById('dl-start-btn');
   const cancelBtn = document.getElementById('dl-cancel-btn');
   const panel     = document.getElementById('download-panel');
+  const statusMsg = document.getElementById('dl-status-msg');
 
   startBtn.disabled = true;
+  statusMsg.style.display = 'none';
   try {
-    const resp = await fetch('/api/download/start');
+    const resp = await fetch('/api/download/start', { method: 'POST' });
     const data = await resp.json();
     if (!resp.ok) {
-      alert('Ошибка запуска загрузки: ' + (data.error || 'HTTP ' + resp.status));
+      statusMsg.className = 'status-msg err';
+      statusMsg.textContent = 'Ошибка запуска: ' + (data.error || 'HTTP ' + resp.status);
+      statusMsg.style.display = '';
       startBtn.disabled = false;
       return;
     }
   } catch (e) {
-    alert('Ошибка: ' + e.message);
+    statusMsg.className = 'status-msg err';
+    statusMsg.textContent = 'Ошибка: ' + e.message;
+    statusMsg.style.display = '';
     startBtn.disabled = false;
     return;
   }
@@ -907,7 +913,7 @@ async function dlStart() {
   cancelBtn.style.display = '';
   cancelBtn.disabled = false;
   panel.style.display = '';
-  _dlLogLines = [];
+  _dlLastData = null;
   document.getElementById('dl-log').textContent = '';
   document.getElementById('dl-current').textContent = '—';
   document.getElementById('dl-progress-bar').style.width = '0%';
@@ -935,16 +941,15 @@ async function dlStart() {
         d.done_count + ' / ' + d.model_count;
     }
 
-    // Append new log lines
+    // Update log (full replacement to avoid delta sync issues when log is bounded server-side)
     if (d.log && d.log.length > 0) {
       const logEl = document.getElementById('dl-log');
-      const allNew = d.log.slice(_dlLogLines.length);
-      if (allNew.length > 0) {
-        _dlLogLines = d.log.slice();
-        logEl.textContent += allNew.join('\n') + '\n';
-        logEl.scrollTop = logEl.scrollHeight;
-      }
+      logEl.textContent = d.log.join('\n');
+      logEl.scrollTop = logEl.scrollHeight;
     }
+
+    // Save last snapshot for completion summary
+    _dlLastData = d;
 
     // Done?
     if (!d.running) {
@@ -964,10 +969,23 @@ function dlDone() {
   const panel     = document.getElementById('download-panel');
 
   document.getElementById('dl-progress-bar').style.width = '100%';
-  document.getElementById('dl-current').textContent = 'Завершено';
   cancelBtn.style.display = 'none';
   startBtn.style.display  = '';
   startBtn.disabled = false;
+
+  // Build completion summary from last SSE snapshot
+  const currentEl = document.getElementById('dl-current');
+  if (_dlLastData && _dlLastData.status_map && Object.keys(_dlLastData.status_map).length > 0) {
+    const counts = { DOWNLOAD: 0, SKIP: 0, ERROR: 0 };
+    Object.values(_dlLastData.status_map).forEach(v => { if (v in counts) counts[v]++; });
+    const parts = [];
+    if (counts.DOWNLOAD > 0) parts.push(`<span class="dl-badge dl-badge-dl">↓ ${counts.DOWNLOAD} скачано</span>`);
+    if (counts.SKIP > 0)     parts.push(`<span class="dl-badge dl-badge-skip">— ${counts.SKIP} пропущено</span>`);
+    if (counts.ERROR > 0)    parts.push(`<span class="dl-badge dl-badge-err">✗ ${counts.ERROR} ошибок</span>`);
+    currentEl.innerHTML = parts.length > 0 ? parts.join(' ') : 'Завершено';
+  } else {
+    currentEl.textContent = 'Завершено';
+  }
 
   // Refresh model status dots after download
   loadModels();
@@ -1298,36 +1316,6 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e), "results": []}, status=500)
 
-        elif path == "/api/download/start":
-            with _dl_lock:
-                if download_state["running"]:
-                    self._send_json({"error": "Download already running"}, status=409)
-                    return
-                # Count enabled models
-                try:
-                    models_list = get_models_json(self.config_path)
-                    enabled_count = sum(1 for m in models_list if m.get("enabled", True))
-                except Exception:
-                    enabled_count = 0
-                # Reset state
-                download_state["running"] = True
-                download_state["cancelled"] = False
-                download_state["process"] = None
-                download_state["log"] = []
-                download_state["current"] = ""
-                download_state["progress"] = 0
-                download_state["model_count"] = enabled_count
-                download_state["done_count"] = 0
-                download_state["status_map"] = {}
-            # Start background download thread
-            t = threading.Thread(
-                target=_download_worker,
-                args=(self.config_path,),
-                daemon=True,
-            )
-            t.start()
-            self._send_json({"status": "started", "model_count": enabled_count})
-
         elif path == "/api/download/stream":
             self._send_sse_headers()
             try:
@@ -1340,7 +1328,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                             "progress": download_state["progress"],
                             "model_count": download_state["model_count"],
                             "done_count": download_state["done_count"],
-                            "log": list(download_state["log"][-30:]),
+                            "log": list(download_state["log"][-100:]),
                             "status_map": dict(download_state["status_map"]),
                         }
                     payload = json.dumps(snapshot, ensure_ascii=False)
@@ -1369,6 +1357,37 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             self._send_json({"status": "cancelled"})
+            return
+
+        if self.path == "/api/download/start":
+            with _dl_lock:
+                if download_state["running"]:
+                    self._send_json({"error": "Download already running"}, status=409)
+                    return
+                # Count enabled models
+                try:
+                    models_list = get_models_json(self.config_path)
+                    enabled_count = sum(1 for m in models_list if m.get("enabled", True))
+                except Exception:
+                    enabled_count = 0
+                # Reset state
+                download_state["running"] = True
+                download_state["cancelled"] = False
+                download_state["process"] = None
+                download_state["log"] = []
+                download_state["current"] = ""
+                download_state["progress"] = 0
+                download_state["model_count"] = enabled_count
+                download_state["done_count"] = 0
+                download_state["status_map"] = {}
+            # Start background download thread
+            t = threading.Thread(
+                target=_download_worker,
+                args=(self.config_path,),
+                daemon=True,
+            )
+            t.start()
+            self._send_json({"status": "started", "model_count": enabled_count})
             return
 
         try:

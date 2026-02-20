@@ -1,17 +1,17 @@
 <!doctype html>
-<html class="no-js" lang="en" data-content_root="../../../">
+<html class="no-js" lang="en" data-content_root="../">
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="../../../genindex.html"><link rel="search" title="Search" href="../../../search.html"><link rel="next" title="Data Flow — Model Download Pipeline" href="data-flow-download.html"><link rel="prev" title="Руководство пользователя aihub" href="../../GUIDES.html">
+<link rel="index" title="Index" href="../genindex.html"><link rel="search" title="Search" href="../search.html"><link rel="next" title="Dependency Graph — aihub" href="diagrams/dependency-graph.html"><link rel="prev" title="Устранение неполадок (Troubleshooting)" href="../TROUBLESHOOTING.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
-        <title>Dependency Graph — aihub - aihub Documentation</title>
-      <link rel="stylesheet" type="text/css" href="../../../_static/pygments.css?v=d111a655" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo.css?v=7bdb33bb" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/copybutton.css?v=76b2166b" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/sphinx-design.min.css?v=95c83b7e" />
-    <link rel="stylesheet" type="text/css" href="../../../_static/styles/furo-extensions.css?v=8dab3a3b" />
+        <title>Architecture Documentation — aihub - aihub Documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=d111a655" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo.css?v=7bdb33bb" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/sphinx-design.min.css?v=95c83b7e" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/furo-extensions.css?v=8dab3a3b" />
     
     
 
@@ -163,7 +163,7 @@
       </label>
     </div>
     <div class="header-center">
-      <a href="../../sphinx/index.html"><div class="brand">aihub Documentation</div></a>
+      <a href="../index.html"><div class="brand">aihub Documentation</div></a>
     </div>
     <div class="header-right">
       <div class="theme-toggle-container theme-toggle-header">
@@ -182,11 +182,11 @@
   <aside class="sidebar-drawer">
     <div class="sidebar-container">
       
-      <div class="sidebar-sticky"><a class="sidebar-brand" href="../../sphinx/index.html">
+      <div class="sidebar-sticky"><a class="sidebar-brand" href="../index.html">
   
   <span class="sidebar-brand-text">aihub Documentation</span>
   
-</a><form class="sidebar-search-container" method="get" action="../../../search.html" role="search">
+</a><form class="sidebar-search-container" method="get" action="../search.html" role="search">
   <input class="sidebar-search" placeholder="Search" name="q" aria-label="Search">
   <input type="hidden" name="check_keywords" value="yes">
   <input type="hidden" name="area" value="default">
@@ -194,17 +194,18 @@
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
   <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../../README.html">aihub</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../../GUIDES.html">Руководство пользователя aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../GUIDES.html">Руководство пользователя aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../TROUBLESHOOTING.html">Устранение неполадок (Troubleshooting)</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
 <ul class="current">
-<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Dependency Graph — aihub</a></li>
-<li class="toctree-l1"><a class="reference internal" href="data-flow-download.html">Data Flow — Model Download Pipeline</a></li>
+<li class="toctree-l1 current current-page"><a class="current reference internal" href="#">Architecture Documentation — aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="diagrams/dependency-graph.html">Dependency Graph — aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="diagrams/data-flow-download.html">Data Flow — Model Download Pipeline</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Reference</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../../compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.html">Полное руководство по локальным AI-моделям в 2025–2026</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.html">Полное руководство по локальным AI-моделям в 2025–2026</a></li>
 </ul>
 
 </div>
@@ -225,7 +226,7 @@
         </a>
         <div class="content-icon-container">
           <div class="view-this-page">
-  <a class="muted-link" href="../../../_sources/docs/architecture/diagrams/dependency-graph.md.txt" title="View this page">
+  <a class="muted-link" href="../_sources/architecture/README.md.txt" title="View this page">
     <svg><use href="#svg-eye"></use></svg>
     <span class="visually-hidden">View this page</span>
   </a>
@@ -243,9 +244,20 @@
           </label>
         </div>
         <article role="main" id="furo-main-content">
-          <section id="dependency-graph-aihub">
-<h1>Dependency Graph — aihub<a class="headerlink" href="#dependency-graph-aihub" title="Link to this heading">¶</a></h1>
-<p>Generated: 2026-02-20</p>
+          <section id="architecture-documentation-aihub">
+<h1>Architecture Documentation — aihub<a class="headerlink" href="#architecture-documentation-aihub" title="Link to this heading">¶</a></h1>
+<p>Generated: 2026-02-20 | Version: 1.0.0</p>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">¶</a></h2>
+<p><strong>aihub</strong> is a Python CLI toolset for discovering, downloading, and managing open-source AI models from HuggingFace Hub, with support for S3-compatible object storage synchronization and a web-based management UI.</p>
+<ul class="simple">
+<li><p><strong>Pattern:</strong> Layered architecture (Presentation / Business / Data / External)</p></li>
+<li><p><strong>Language:</strong> Python 3.9+</p></li>
+<li><p><strong>Components:</strong> 6 (3 CLI scripts, 1 utility module, 2 config files)</p></li>
+<li><p><strong>Entry points:</strong> <code class="docutils literal notranslate"><span class="pre">download_models.py</span></code>, <code class="docutils literal notranslate"><span class="pre">browse_models.py</span></code>, <code class="docutils literal notranslate"><span class="pre">model_browser.py</span></code></p></li>
+</ul>
+</section>
+<hr class="docutils" />
 <section id="component-dependency-graph">
 <h2>Component Dependency Graph<a class="headerlink" href="#component-dependency-graph" title="Link to this heading">¶</a></h2>
 <pre  class="mermaid">
@@ -257,77 +269,177 @@
     end
 
     subgraph business[&quot;Business Layer&quot;]
-        UT[&quot;utils.py\nShared Utilities\n(fmt_size, load_hf_token)&quot;]
+        UT[&quot;utils.py\nShared Utilities&quot;]
     end
 
     subgraph data[&quot;Data Layer&quot;]
         MC[&quot;models.yaml\nModel List Config&quot;]
-        CC[&quot;credentials.yaml + .env\nCredentials &amp; Env Config&quot;]
+        CC[&quot;credentials.yaml + .env\nCredentials Config&quot;]
     end
 
     subgraph external[&quot;External Services&quot;]
-        HF[&quot;HuggingFace Hub API\n(huggingface_hub)&quot;]
-        S3[&quot;S3-Compatible Storage\n(boto3: AWS/MinIO/Yandex/R2)&quot;]
-        HFT[&quot;hf_transfer\n(optional Rust accelerator)&quot;]
+        HF[&quot;HuggingFace Hub API&quot;]
+        S3[&quot;S3-Compatible Storage&quot;]
     end
 
     DL --&gt;|&quot;fmt_size, load_hf_token&quot;| UT
-    DL --&gt;|&quot;reads model list &amp; settings&quot;| MC
+    DL --&gt;|&quot;reads model list&quot;| MC
     DL --&gt;|&quot;reads HF token + S3 creds&quot;| CC
     BM --&gt;|&quot;load_hf_token&quot;| UT
     BM --&gt;|&quot;reads HF token&quot;| CC
     MB --&gt;|&quot;fmt_size&quot;| UT
     MB --&gt;|&quot;reads &amp; writes atomically&quot;| MC
-
-    DL --&gt;|&quot;hf_hub_download, list_models\nget_hf_file_metadata&quot;| HF
-    BM --&gt;|&quot;list_models, list_repo_files&quot;| HF
-    DL -.-&gt;|&quot;optional: upload_file\nhead_object&quot;| S3
-    DL -.-&gt;|&quot;optional: fast download\nHF_HUB_ENABLE_HF_TRANSFER=1&quot;| HFT
+    DL --&gt;|&quot;download, ETag&quot;| HF
+    BM --&gt;|&quot;search, list files&quot;| HF
+    DL -.-&gt;|&quot;optional S3 upload&quot;| S3
 
     style presentation fill:#e1f5ff,stroke:#0288d1
     style business fill:#fff4e1,stroke:#f57c00
     style data fill:#ffe1e1,stroke:#c62828
     style external fill:#f0f0f0,stroke:#757575
-    style DL fill:#b3e5fc,stroke:#0288d1
-    style BM fill:#b3e5fc,stroke:#0288d1
-    style MB fill:#b3e5fc,stroke:#0288d1
-    style UT fill:#ffe0b2,stroke:#f57c00
-    style MC fill:#ffcdd2,stroke:#c62828
-    style CC fill:#ffcdd2,stroke:#c62828
-    style HF fill:#e0e0e0,stroke:#757575
-    style S3 fill:#e0e0e0,stroke:#757575
-    style HFT fill:#e0e0e0,stroke:#757575
     </pre></section>
-<section id="makefile-script-mapping">
-<h2>Makefile → Script Mapping<a class="headerlink" href="#makefile-script-mapping" title="Link to this heading">¶</a></h2>
-<pre  class="mermaid">
-        graph LR
-    MK[&quot;Makefile&quot;]
-    MK --&gt;|&quot;make setup&quot;| SETUP[&quot;python3 -m venv .venv\npip install -r requirements.txt&quot;]
-    MK --&gt;|&quot;make download&quot;| DL[&quot;scripts/download_models.py&quot;]
-    MK --&gt;|&quot;make list&quot;| DL
-    MK --&gt;|&quot;make browse&quot;| BM[&quot;scripts/browse_models.py&quot;]
-    MK --&gt;|&quot;make ui&quot;| MB[&quot;scripts/model_browser.py&quot;]
-    MK --&gt;|&quot;make update&quot;| UPDATE[&quot;pip install --upgrade -r requirements.txt&quot;]
-
-    style MK fill:#fff4e1,stroke:#f57c00
-    style DL fill:#b3e5fc,stroke:#0288d1
-    style BM fill:#b3e5fc,stroke:#0288d1
-    style MB fill:#b3e5fc,stroke:#0288d1
-    </pre></section>
-<section id="credential-resolution-chain">
-<h2>Credential Resolution Chain<a class="headerlink" href="#credential-resolution-chain" title="Link to this heading">¶</a></h2>
-<pre  class="mermaid">
-        graph LR
-    A[&quot;credentials.yaml\n(highest priority)&quot;] --&gt;|&quot;HF token,\nS3 keys&quot;| UT[&quot;utils.load_hf_token()\ndownload_models.load_credentials()&quot;]
-    B[&quot;.env\n(medium priority)&quot;] --&gt;|&quot;S3 bucket,\nregion, endpoint&quot;| UT
-    C[&quot;Environment Variables\n(lowest priority)\nHF_TOKEN, AWS_*&quot;] --&gt;|&quot;fallback&quot;| UT
-
-    style A fill:#ffcdd2,stroke:#c62828
-    style B fill:#ffcdd2,stroke:#c62828
-    style C fill:#f0f0f0,stroke:#757575
-    style UT fill:#ffe0b2,stroke:#f57c00
-    </pre></section>
+<hr class="docutils" />
+<section id="files">
+<h2>Files<a class="headerlink" href="#files" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>File</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="../_downloads/df96b4e65f903e7f19f0e7ea055b4f03/overview.yaml"><span class="xref download myst">overview.yaml</span></a></p></td>
+<td><p>Full architecture specification: all components, dependencies, quality attributes, external integrations</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="../_downloads/34de477cb197d2d40f0d032e2adecf8c/dependency-graph.yaml"><span class="xref download myst">dependency-graph.yaml</span></a></p></td>
+<td><p>Machine-readable dependency graph (nodes + edges)</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="../_downloads/67011e5b9bb33d10b61727b104088024/utils.yaml"><span class="xref download myst">components/utils.yaml</span></a></p></td>
+<td><p>Shared Utilities component spec</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="../_downloads/e214f293b11c75cb00131c77a4996d1c/download-models.yaml"><span class="xref download myst">components/download-models.yaml</span></a></p></td>
+<td><p>Model Downloader component spec</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference download internal" download="" href="../_downloads/5bf39fc4572799130a93fec3eed6a2d5/browse-models.yaml"><span class="xref download myst">components/browse-models.yaml</span></a></p></td>
+<td><p>HF Hub Browser component spec</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference download internal" download="" href="../_downloads/28d84d39fce6bf2e7acf22f5b44367aa/model-browser.yaml"><span class="xref download myst">components/model-browser.yaml</span></a></p></td>
+<td><p>Web UI Model Browser component spec</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="diagrams/dependency-graph.html"><span class="std std-doc">diagrams/dependency-graph.md</span></a></p></td>
+<td><p>Mermaid dependency diagrams (component graph, Makefile mapping, credential chain)</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="diagrams/data-flow-download.html"><span class="std std-doc">diagrams/data-flow-download.md</span></a></p></td>
+<td><p>Mermaid data flow diagrams (download pipeline, web UI save flow)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<hr class="docutils" />
+<section id="architecture-layers">
+<h2>Architecture Layers<a class="headerlink" href="#architecture-layers" title="Link to this heading">¶</a></h2>
+<section id="presentation-layer">
+<h3>Presentation Layer<a class="headerlink" href="#presentation-layer" title="Link to this heading">¶</a></h3>
+<p>Three independent CLI entry points, each callable via Makefile:</p>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Script</p></th>
+<th class="head"><p>Makefile</p></th>
+<th class="head"><p>Purpose</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">scripts/download_models.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">download</span></code>, <code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">list</span></code></p></td>
+<td><p>Download AI models to local disk and/or S3</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">scripts/browse_models.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">browse</span></code></p></td>
+<td><p>Search HuggingFace Hub for models</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">scripts/model_browser.py</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">make</span> <span class="pre">ui</span></code></p></td>
+<td><p>Web UI at http://localhost:9000</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="business-layer">
+<h3>Business Layer<a class="headerlink" href="#business-layer" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">scripts/utils.py</span></code> — <code class="docutils literal notranslate"><span class="pre">fmt_size()</span></code> and <code class="docutils literal notranslate"><span class="pre">load_hf_token()</span></code> shared by all three scripts</p></li>
+</ul>
+</section>
+<section id="data-layer">
+<h3>Data Layer<a class="headerlink" href="#data-layer" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">models.yaml</span></code> — model list with per-model metadata, read by downloader and web UI, written atomically by web UI</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">credentials.yaml</span></code> + <code class="docutils literal notranslate"><span class="pre">.env</span></code> — gitignored secret/config split (see security below)</p></li>
+</ul>
+</section>
+<section id="external-integrations">
+<h3>External Integrations<a class="headerlink" href="#external-integrations" title="Link to this heading">¶</a></h3>
+<ul class="simple">
+<li><p><strong>HuggingFace Hub</strong> (<code class="docutils literal notranslate"><span class="pre">huggingface_hub</span></code>) — model discovery and file downloads with ETag support</p></li>
+<li><p><strong>S3-Compatible Storage</strong> (<code class="docutils literal notranslate"><span class="pre">boto3</span></code>) — AWS S3, MinIO, Yandex Object Storage, Cloudflare R2</p></li>
+<li><p><strong>hf_transfer</strong> (optional) — Rust-based download acceleration</p></li>
+</ul>
+</section>
+</section>
+<hr class="docutils" />
+<section id="key-design-decisions">
+<h2>Key Design Decisions<a class="headerlink" href="#key-design-decisions" title="Link to this heading">¶</a></h2>
+<section id="idempotent-downloads">
+<h3>Idempotent Downloads<a class="headerlink" href="#idempotent-downloads" title="Link to this heading">¶</a></h3>
+<p>ETag-based change detection with sidecar <code class="docutils literal notranslate"><span class="pre">.etag</span></code> files. Atomic writes via <code class="docutils literal notranslate"><span class="pre">tempfile.mkstemp</span></code> + <code class="docutils literal notranslate"><span class="pre">os.replace</span></code> prevent partial files on failure.</p>
+</section>
+<section id="split-secret-config-pattern">
+<h3>Split Secret/Config Pattern<a class="headerlink" href="#split-secret-config-pattern" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">credentials.yaml</span></code> holds secrets (tokens, keys). <code class="docutils literal notranslate"><span class="pre">.env</span></code> holds parameters (bucket, region, endpoint). Both are gitignored. Priority: credentials.yaml &gt; .env &gt; environment variables.</p>
+</section>
+<section id="stdlib-only-web-server">
+<h3>Stdlib-Only Web Server<a class="headerlink" href="#stdlib-only-web-server" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">model_browser.py</span></code> uses only <code class="docutils literal notranslate"><span class="pre">http.server</span></code>, <code class="docutils literal notranslate"><span class="pre">json</span></code>, <code class="docutils literal notranslate"><span class="pre">pathlib</span></code>, <code class="docutils literal notranslate"><span class="pre">tempfile</span></code>, and <code class="docutils literal notranslate"><span class="pre">os</span></code> from the standard library. No Flask, FastAPI, or other web framework dependency.</p>
+</section>
+<section id="s3-abstraction">
+<h3>S3 Abstraction<a class="headerlink" href="#s3-abstraction" title="Link to this heading">¶</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">S3Config.endpoint_url</span></code> supports any S3-compatible API. Empty = standard AWS; set for MinIO/Yandex/R2.</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="quality-attributes">
+<h2>Quality Attributes<a class="headerlink" href="#quality-attributes" title="Link to this heading">¶</a></h2>
+<div class="table-wrapper colwidths-auto docutils container">
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd"><th class="head"><p>Attribute</p></th>
+<th class="head"><p>Mechanism</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>Idempotency</p></td>
+<td><p>ETag comparison, atomic writes, S3 size check</p></td>
+</tr>
+<tr class="row-odd"><td><p>Reliability</p></td>
+<td><p>Exponential backoff, HTTP 429 ×10 delay, finally-block cleanup</p></td>
+</tr>
+<tr class="row-even"><td><p>Security</p></td>
+<td><p>Gitignored secrets, yaml.safe_load, localhost-only web server</p></td>
+</tr>
+<tr class="row-odd"><td><p>Extensibility</p></td>
+<td><p>S3 endpoint_url override, optional hf_transfer accelerator</p></td>
+</tr>
+<tr class="row-even"><td><p>Usability</p></td>
+<td><p>Makefile targets, rich CLI help, web UI, YAML snippet output</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 
         </article>
@@ -335,23 +447,23 @@
       <footer>
         
         <div class="related-pages">
-          <a class="next-page" href="data-flow-download.html">
+          <a class="next-page" href="diagrams/dependency-graph.html">
               <div class="page-info">
                 <div class="context">
                   <span>Next</span>
                 </div>
-                <div class="title">Data Flow — Model Download Pipeline</div>
+                <div class="title">Dependency Graph — aihub</div>
               </div>
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
             </a>
-          <a class="prev-page" href="../../GUIDES.html">
+          <a class="prev-page" href="../TROUBLESHOOTING.html">
               <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
               <div class="page-info">
                 <div class="context">
                   <span>Previous</span>
                 </div>
                 
-                <div class="title">Руководство пользователя aihub</div>
+                <div class="title">Устранение неполадок (Troubleshooting)</div>
                 
               </div>
             </a>
@@ -385,10 +497,25 @@
         <div class="toc-tree-container">
           <div class="toc-tree">
             <ul>
-<li><a class="reference internal" href="#">Dependency Graph — aihub</a><ul>
+<li><a class="reference internal" href="#">Architecture Documentation — aihub</a><ul>
+<li><a class="reference internal" href="#overview">Overview</a></li>
 <li><a class="reference internal" href="#component-dependency-graph">Component Dependency Graph</a></li>
-<li><a class="reference internal" href="#makefile-script-mapping">Makefile → Script Mapping</a></li>
-<li><a class="reference internal" href="#credential-resolution-chain">Credential Resolution Chain</a></li>
+<li><a class="reference internal" href="#files">Files</a></li>
+<li><a class="reference internal" href="#architecture-layers">Architecture Layers</a><ul>
+<li><a class="reference internal" href="#presentation-layer">Presentation Layer</a></li>
+<li><a class="reference internal" href="#business-layer">Business Layer</a></li>
+<li><a class="reference internal" href="#data-layer">Data Layer</a></li>
+<li><a class="reference internal" href="#external-integrations">External Integrations</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#key-design-decisions">Key Design Decisions</a><ul>
+<li><a class="reference internal" href="#idempotent-downloads">Idempotent Downloads</a></li>
+<li><a class="reference internal" href="#split-secret-config-pattern">Split Secret/Config Pattern</a></li>
+<li><a class="reference internal" href="#stdlib-only-web-server">Stdlib-Only Web Server</a></li>
+<li><a class="reference internal" href="#s3-abstraction">S3 Abstraction</a></li>
+</ul>
+</li>
+<li><a class="reference internal" href="#quality-attributes">Quality Attributes</a></li>
 </ul>
 </li>
 </ul>
@@ -400,13 +527,13 @@
       
     </aside>
   </div>
-</div><script src="../../../_static/documentation_options.js?v=8a448e45"></script>
-    <script src="../../../_static/doctools.js?v=fd6eb6e6"></script>
-    <script src="../../../_static/sphinx_highlight.js?v=6ffebe34"></script>
-    <script src="../../../_static/scripts/furo.js?v=46bd48cc"></script>
-    <script src="../../../_static/clipboard.min.js?v=a7894cd8"></script>
-    <script src="../../../_static/copybutton.js?v=f281be69"></script>
-    <script src="../../../_static/design-tabs.js?v=f930bc37"></script>
+</div><script src="../_static/documentation_options.js?v=8a448e45"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/scripts/furo.js?v=46bd48cc"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=f281be69"></script>
+    <script src="../_static/design-tabs.js?v=f930bc37"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
     <script type="module">import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.esm.min.mjs";
 

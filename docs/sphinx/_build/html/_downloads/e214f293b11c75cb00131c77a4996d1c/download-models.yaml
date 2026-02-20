@@ -1,0 +1,91 @@
+---
+# Component: Model Downloader
+# Generated: 2026-02-20
+
+id: download-models
+name: Model Downloader
+layer: presentation
+path: scripts/download_models.py
+type: script
+entry_point: true
+
+description: >
+  Primary CLI script for downloading AI model files from HuggingFace Hub to
+  local disk and/or S3-compatible object storage. Implements a comprehensive
+  download pipeline with idempotency, reliability, and storage flexibility.
+
+key_behaviors:
+  idempotency:
+    - ETag-based change detection (sidecar .etag files)
+    - Atomic writes via tempfile + os.replace (no partial files)
+    - Skip logic: skip > etag > always update policies
+  reliability:
+    - Retry loop with exponential backoff (retry_delay * 2^attempt)
+    - HTTP 429 rate-limit detection → 10x delay multiplier
+    - EntryNotFoundError shortcut (no retry, repo error)
+    - Guaranteed temp dir cleanup in finally block
+  s3_support:
+    - Size-based idempotency (head_object ContentLength)
+    - Multipart upload for files > 100 MB (100 MB chunk size, 4 concurrent)
+    - Supports: AWS S3, MinIO, Yandex Object Storage, Cloudflare R2
+    - S3-only mode: downloads to tmpdir, uploads, then deletes local file
+  gated_models:
+    - Detects gated=true and missing HF_TOKEN before download attempt
+    - Returns ERROR with link to HuggingFace acceptance page
+
+data_classes:
+  ModelEntry:
+    fields: [repo_id, filename, dest_dir, enabled, gated, tags, vram_gb, description]
+  S3Config:
+    fields: [access_key_id, secret_access_key, region, endpoint_url, bucket, prefix]
+    property: valid (bool — all required fields present)
+  DownloadResult:
+    fields: [model, status, local_path, error, size_bytes, s3_status, s3_error]
+    status_values: [SKIP, DOWNLOAD, ERROR, DRYRUN, DISABLED]
+    s3_status_values: [UPLOADED, SKIP, ERROR, ""]
+
+dependencies:
+  internal:
+    - utils (fmt_size, load_hf_token)
+    - models-config (models.yaml)
+    - credentials-config (credentials.yaml, .env)
+  external:
+    - name: huggingface_hub
+      usage: "hf_hub_download, HfApi, get_hf_file_metadata, hf_hub_url, list_repo_files"
+    - name: PyYAML
+      usage: "yaml.safe_load for config parsing"
+    - name: python-dotenv
+      usage: "load_dotenv('.env') at startup"
+    - name: tqdm
+      usage: "progress bar over model list"
+    - name: boto3
+      optional: true
+      usage: "S3 client, upload_file, head_object"
+    - name: hf_transfer
+      optional: true
+      usage: "Rust-based download acceleration (activated by env var)"
+
+cli_interface:
+  program: download_models.py
+  positional: []
+  options:
+    - "--config FILE      : path to models.yaml (default: models.yaml)"
+    - "--creds FILE       : path to credentials.yaml (default: credentials.yaml)"
+    - "--dry-run          : validate repos without downloading"
+    - "--force            : re-download even if file exists"
+    - "--model SUBSTRING  : filter by repo_id or filename substring"
+    - "--tag TAG          : filter by tag"
+    - "--list             : print model table and exit"
+    - "--include-disabled : process models with enabled: false"
+    - "--retries N        : retry count (default from models.yaml, else 3)"
+    - "--retry-delay SECS : base retry delay in seconds (default 5)"
+    - "--delay SECS       : pause between models (default 0)"
+    - "--upload-s3        : upload to S3 after local download"
+    - "--s3-only          : download to tmpdir, upload to S3, delete local"
+  exit_codes:
+    0: "all models processed without errors"
+    1: "one or more download or S3 errors occurred"
+
+makefile_targets:
+  - "make download : runs with no extra args"
+  - "make list     : runs with --list"

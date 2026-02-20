@@ -1,0 +1,82 @@
+---
+# Component: Web UI Model Browser
+# Generated: 2026-02-20
+
+id: model-browser
+name: Web UI Model Browser
+layer: presentation
+path: scripts/model_browser.py
+type: script
+entry_point: true
+
+description: >
+  Stdlib-only HTTP server providing a browser-based UI for managing the model
+  list. Embeds a complete single-page application as an inline HTML string.
+  No external web framework is used (no Flask/FastAPI). The UI provides
+  real-time filtering, download status indicators, enabled/disabled toggles,
+  and atomic saves to models.yaml.
+
+architecture_notes:
+  server: "Python stdlib http.server.HTTPServer + BaseHTTPRequestHandler"
+  frontend: "Vanilla JS SPA embedded in HTML_PAGE string (no build step)"
+  atomicity: "POST /api/save uses tempfile.mkstemp + os.replace for POSIX atomic write"
+  handler_factory: "make_handler(config_path) creates a Handler class with config_path bound as class attribute"
+
+rest_api:
+  GET /api/models:
+    description: "Return all model entries enriched with disk info"
+    response: "JSON array of model objects"
+    model_fields: [repo_id, filename, dest_dir, enabled, gated, tags, vram_gb, description, downloaded, disk_size_bytes, disk_size_str]
+
+  POST /api/save:
+    description: "Atomically update enabled flags in models.yaml"
+    request_body: "JSON {updates: [{repo_id, filename, enabled}]}"
+    response_success: "HTTP 200 {status: ok, updated: N}"
+    response_error_400: "Invalid JSON or validation error"
+    response_error_500: "Filesystem or YAML error"
+
+  GET /:
+    description: "Serve the SPA (HTML_PAGE string)"
+
+frontend_features:
+  - "Text search across repo_id, filename, description"
+  - "Tag filter buttons (multi-tag AND logic)"
+  - "Toggle: show only downloaded models"
+  - "Download status indicator (green dot = on disk, gray = not found)"
+  - "Enabled checkbox per model with change tracking"
+  - "Batch save with diff tracking (only changed models sent to server)"
+  - "Disk size display in human-readable format"
+  - "GATED badge for gated models"
+
+dependencies:
+  internal:
+    - utils (fmt_size)
+    - models-config (models.yaml — read and write)
+  external:
+    - name: PyYAML
+      usage: "yaml.safe_load for reading, yaml.dump for writing models.yaml"
+  stdlib_only: true  # no Flask, FastAPI, or other web frameworks
+
+cli_interface:
+  program: model_browser.py
+  options:
+    - "--port PORT  : HTTP port (default: 9000)"
+    - "--host HOST  : bind address (default: 127.0.0.1)"
+    - "--config FILE: path to models.yaml (default: models.yaml)"
+  exit_codes:
+    0: "server stopped cleanly (Ctrl+C)"
+    1: "config file not found or YAML parse error"
+
+security:
+  - "Binds to 127.0.0.1 by default (not exposed to network)"
+  - "Use --host 0.0.0.0 explicitly for network access"
+  - "YAML loaded with safe_load (no arbitrary code execution)"
+  - "Atomic writes prevent config corruption on power loss"
+
+makefile_targets:
+  - "make ui : opens http://localhost:9000"
+
+usage_examples:
+  - "python scripts/model_browser.py"
+  - "python scripts/model_browser.py --port 8080"
+  - "python scripts/model_browser.py --host 0.0.0.0 --port 9000"

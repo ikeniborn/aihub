@@ -1,0 +1,316 @@
+---
+# Architecture Overview — aihub
+# Generated: 2026-02-20
+# Version: 1.0.0
+
+project:
+  name: aihub
+  version: "0.1.0"
+  language: Python
+  python_version: ">=3.9"
+  description: >
+    CLI toolset for discovering, downloading, and managing open-source AI models
+    from HuggingFace Hub. Supports local storage and S3-compatible object storage
+    synchronization. Includes a web-based management UI.
+  root: /home/ikeniborn/Documents/Project/aihub
+
+architecture:
+  pattern: layered
+  layers:
+    - presentation     # CLI entry points and Web UI
+    - business         # Download logic, search logic, ETag idempotency, S3 sync
+    - data             # models.yaml config, credentials.yaml, .env
+    - infrastructure   # HuggingFace Hub API, S3/boto3, filesystem
+
+components:
+  - id: utils
+    name: Shared Utilities
+    layer: business
+    path: scripts/utils.py
+    type: module
+    description: >
+      Shared helper functions used by all scripts. Provides fmt_size() for
+      human-readable byte formatting and load_hf_token() for loading the
+      HuggingFace authentication token from credentials.yaml or the HF_TOKEN
+      environment variable. Single source of truth for credential loading.
+    public_api:
+      - fmt_size(n) -> str
+      - load_hf_token(creds_path) -> Optional[str]
+    dependencies: []
+    external_deps:
+      - PyYAML
+
+  - id: download-models
+    name: Model Downloader
+    layer: presentation
+    path: scripts/download_models.py
+    type: script
+    description: >
+      Primary script for downloading AI models from HuggingFace Hub to local
+      disk and/or S3-compatible object storage. Implements idempotent downloads
+      via ETag comparison, atomic file writes (tempfile + os.replace), retry
+      logic with exponential backoff and rate-limit handling, gated model
+      support, and S3 multipart upload. Supports dry-run, filtering by tag or
+      model name, and S3-only mode (no local persistence).
+    entry_point: true
+    public_api:
+      - main() -> int
+      - download_model(...) -> DownloadResult
+      - sync_model_to_s3(...) -> DownloadResult
+      - load_credentials(creds_path) -> tuple[Optional[str], S3Config]
+      - load_config(config_path) -> tuple[dict, list[ModelEntry]]
+      - apply_filters(models, model_filter, tag_filter) -> list[ModelEntry]
+    data_classes:
+      - ModelEntry
+      - S3Config
+      - DownloadResult
+    dependencies:
+      - utils
+      - models-config
+      - credentials-config
+    external_deps:
+      - huggingface_hub
+      - PyYAML
+      - python-dotenv
+      - tqdm
+      - boto3 (optional, for S3)
+      - hf_transfer (optional, for fast downloads)
+    cli_flags:
+      - "--config FILE"
+      - "--creds FILE"
+      - "--dry-run"
+      - "--force"
+      - "--model SUBSTRING"
+      - "--tag TAG"
+      - "--list"
+      - "--include-disabled"
+      - "--retries N"
+      - "--retry-delay SECS"
+      - "--delay SECS"
+      - "--upload-s3"
+      - "--s3-only"
+
+  - id: browse-models
+    name: HuggingFace Hub Browser
+    layer: presentation
+    path: scripts/browse_models.py
+    type: script
+    description: >
+      CLI tool for discovering AI models on HuggingFace Hub via the Hub API.
+      Supports full-text search, author filtering, tag filtering, regex filtering
+      on model IDs, and regex filtering on repository file names. Can output
+      search results as a YAML snippet ready to paste into models.yaml.
+    entry_point: true
+    public_api:
+      - main() -> int
+      - search_models(...) -> list
+      - list_files_for_repo(model_id, file_regex, token) -> list[str]
+      - to_yaml_snippet(models, file_map) -> str
+    dependencies:
+      - utils
+      - credentials-config
+    external_deps:
+      - huggingface_hub
+      - PyYAML
+      - python-dotenv
+    cli_flags:
+      - "--query TEXT"
+      - "--author NAME"
+      - "--tags TAG ..."
+      - "--regex PATTERN"
+      - "--sort downloads|likes|lastModified"
+      - "--limit N"
+      - "--show-files"
+      - "--file-regex PATTERN"
+      - "--yaml"
+      - "--creds FILE"
+
+  - id: model-browser
+    name: Web UI Model Browser
+    layer: presentation
+    path: scripts/model_browser.py
+    type: script
+    description: >
+      HTTP server providing a web-based management interface for AI models.
+      Uses only Python standard library (http.server, json, pathlib, tempfile).
+      Serves a single-page application with filtering by text/tags, download
+      status indicators, enabled/disabled toggles, and atomic saves back to
+      models.yaml. Exposes two REST API endpoints: GET /api/models and
+      POST /api/save.
+    entry_point: true
+    public_api:
+      - main() -> int
+      - get_models_json(config_path) -> list[dict]
+      - save_models(config_path, updates) -> None
+    rest_api:
+      - "GET  /api/models  — list models enriched with disk info"
+      - "POST /api/save    — atomically update enabled flags in models.yaml"
+    dependencies:
+      - utils
+      - models-config
+    external_deps:
+      - PyYAML
+    web_server:
+      default_port: 9000
+      default_host: "127.0.0.1"
+      stdlib_only: true
+
+  - id: models-config
+    name: Model List Configuration
+    layer: data
+    path: models.yaml
+    type: config
+    description: >
+      Central YAML configuration file defining the list of AI models to manage.
+      Contains global settings (models_dir, update_policy, retry parameters,
+      S3 sync flags) and per-model entries with repo_id, filename, dest_dir,
+      enabled flag, gated flag, tags, vram_gb, and description. Read by
+      download_models.py and model_browser.py; written atomically by model_browser.py.
+    schema:
+      settings:
+        - models_dir (str)
+        - default_quant (str)
+        - update_policy (etag|skip|always)
+        - retry_count (int)
+        - retry_delay (float)
+        - inter_download_delay (float)
+        - s3.sync_after_download (bool)
+      models:
+        - repo_id (str, required)
+        - filename (str, required)
+        - dest_dir (str, default: misc)
+        - enabled (bool, default: true)
+        - gated (bool, default: false)
+        - tags (list[str])
+        - vram_gb (float)
+        - description (str)
+    dependencies: []
+
+  - id: credentials-config
+    name: Credentials & Environment Configuration
+    layer: data
+    path: credentials.yaml + .env
+    type: config
+    description: >
+      Split secret/config pattern. credentials.yaml (gitignored) stores
+      sensitive secrets: HuggingFace token and S3 access_key_id/secret_access_key.
+      .env (gitignored) stores non-secret parameters: S3 bucket, region, prefix,
+      endpoint_url, and HF_HUB_ENABLE_HF_TRANSFER flag. Priority chain:
+      credentials.yaml > .env > environment variables.
+    schema:
+      credentials_yaml:
+        - huggingface.token (str)
+        - s3.access_key_id (str)
+        - s3.secret_access_key (str)
+      env:
+        - HF_HUB_ENABLE_HF_TRANSFER (0|1)
+        - S3_BUCKET (str)
+        - S3_REGION (str)
+        - S3_PREFIX (str)
+        - S3_ENDPOINT_URL (str)
+        - HF_TOKEN (str, fallback)
+        - AWS_ACCESS_KEY_ID (str, fallback)
+        - AWS_SECRET_ACCESS_KEY (str, fallback)
+    dependencies: []
+    security_note: >
+      Both files are in .gitignore. credentials.yaml.example and .env.example
+      provide non-secret templates for onboarding.
+
+dependency_graph:
+  edges:
+    - from: download-models
+      to: utils
+      type: required
+      description: "imports fmt_size, load_hf_token via sys.path"
+    - from: download-models
+      to: models-config
+      type: required
+      description: "reads models list and global settings"
+    - from: download-models
+      to: credentials-config
+      type: required
+      description: "reads HF token and S3 credentials"
+    - from: browse-models
+      to: utils
+      type: required
+      description: "imports load_hf_token via sys.path"
+    - from: browse-models
+      to: credentials-config
+      type: required
+      description: "reads HF token for API access"
+    - from: model-browser
+      to: utils
+      type: required
+      description: "imports fmt_size for disk size display"
+    - from: model-browser
+      to: models-config
+      type: required
+      description: "reads and atomically writes models.yaml"
+
+quality_attributes:
+  - attribute: idempotency
+    description: >
+      Downloads are ETag-checked before execution. Files are written atomically
+      using tempfile + os.replace (POSIX rename). S3 uploads compare object
+      size before re-uploading. Models already on disk are skipped.
+
+  - attribute: reliability
+    description: >
+      Exponential backoff retry (default 3 retries, 5s base delay). HTTP 429
+      rate-limit responses trigger a 10x delay multiplier. Gated model detection
+      prevents silent failures. Temp directory is cleaned up in a finally block.
+
+  - attribute: security
+    description: >
+      Secrets (HF token, S3 keys) are stored in gitignored files. Credentials
+      are never embedded in models.yaml or .env. The web UI binds to 127.0.0.1
+      by default. YAML is loaded with yaml.safe_load to prevent code injection.
+
+  - attribute: extensibility
+    description: >
+      S3 backend is abstracted behind S3Config and boto3 kwargs, supporting AWS,
+      MinIO, Yandex Object Storage, and Cloudflare R2 via endpoint_url override.
+      hf_transfer (Rust-based) is an optional accelerator enabled by environment
+      variable, with graceful fallback.
+
+  - attribute: usability
+    description: >
+      Three interfaces for different workflows: Makefile targets for common
+      operations, CLI scripts with rich --help output, and a web UI for visual
+      management. YAML output from browse_models.py can be pasted directly into
+      models.yaml.
+
+warnings: []
+circular_dependencies: []
+
+build:
+  tool: Makefile
+  targets:
+    - "setup   — python3 -m venv .venv && pip install -r requirements.txt"
+    - "download — .venv/bin/python scripts/download_models.py"
+    - "list     — .venv/bin/python scripts/download_models.py --list"
+    - "browse   — .venv/bin/python scripts/browse_models.py"
+    - "ui       — .venv/bin/python scripts/model_browser.py"
+    - "update   — .venv/bin/pip install --upgrade -r requirements.txt"
+  package_manager: pip / uv
+  config_files:
+    - pyproject.toml   # PEP 517, uv-compatible
+    - requirements.txt # pip-compatible fallback
+
+external_integrations:
+  - name: HuggingFace Hub
+    type: api
+    library: huggingface_hub
+    usage: "model search (list_models), file listing (list_repo_files), download (hf_hub_download), ETag (get_hf_file_metadata)"
+
+  - name: S3-Compatible Object Storage
+    type: storage
+    library: boto3
+    providers: [AWS S3, MinIO, Yandex Object Storage, Cloudflare R2]
+    usage: "multipart upload, object existence check (head_object)"
+
+  - name: hf_transfer
+    type: accelerator
+    library: hf_transfer
+    optional: true
+    usage: "Rust-based download acceleration, activated by HF_HUB_ENABLE_HF_TRANSFER=1"

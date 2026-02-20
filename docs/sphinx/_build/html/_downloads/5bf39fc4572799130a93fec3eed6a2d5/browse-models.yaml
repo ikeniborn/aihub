@@ -1,0 +1,74 @@
+---
+# Component: HuggingFace Hub Browser
+# Generated: 2026-02-20
+
+id: browse-models
+name: HuggingFace Hub Browser
+layer: presentation
+path: scripts/browse_models.py
+type: script
+entry_point: true
+
+description: >
+  CLI tool for discovering AI models on HuggingFace Hub. Wraps the HfApi.list_models()
+  API with additional regex filtering and YAML output formatting. Designed to help
+  users find models to add to models.yaml.
+
+key_behaviors:
+  search:
+    - Full-text search via HuggingFace Hub API (search parameter)
+    - Author/organization filter (exact match via author parameter)
+    - Tag filtering (multi-tag AND filter via filter parameter)
+    - Regex post-filter on model_id (applied client-side after API fetch)
+  file_discovery:
+    - list_repo_files() per repository for file enumeration
+    - Regex filter on filenames (e.g. 'Q4_K_M\.gguf$')
+    - Over-fetch strategy: limit * 5 results fetched when regex filter is active
+  output:
+    - Formatted table: #, MODEL ID, DOWNLOADS, LIKES, TAGS
+    - Per-repo file listing (with --show-files / --file-regex)
+    - YAML snippet output (--yaml flag) ready to paste into models.yaml
+    - "YAML entries: repo_id + filename, enabled: false by default"
+
+dependencies:
+  internal:
+    - utils (load_hf_token)
+    - credentials-config (credentials.yaml)
+  external:
+    - name: huggingface_hub
+      usage: "HfApi.list_models(), list_repo_files()"
+    - name: PyYAML
+      usage: "yaml.dump() for YAML snippet output"
+    - name: python-dotenv
+      usage: "load_dotenv('.env') at startup"
+
+cli_interface:
+  program: browse_models.py
+  requires_at_least_one: [--query, --author, --tags, --regex]
+  options:
+    search_group:
+      - "--query TEXT            : full-text search by name/description"
+      - "--author NAME           : filter by author/organization"
+      - "--tags TAG ...          : filter by tags (space-separated)"
+      - "--regex PATTERN         : regex filter on model_id (case-insensitive)"
+      - "--sort downloads|likes|lastModified : sort order (default: downloads)"
+      - "--limit N               : max results (default: 20)"
+    files_group:
+      - "--show-files            : show file list per repository"
+      - "--file-regex PATTERN    : regex filter on filenames (implies --show-files)"
+    output_group:
+      - "--yaml                  : output YAML snippet for models.yaml"
+    other:
+      - "--creds FILE            : credentials file (default: credentials.yaml)"
+  exit_codes:
+    0: "search completed (may return zero results)"
+    1: "no search parameters provided, or HuggingFace API error"
+
+makefile_targets:
+  - "make browse : runs with no extra args (requires manual --query etc.)"
+
+usage_examples:
+  - "python scripts/browse_models.py --query 'qwen'"
+  - "python scripts/browse_models.py --author bartowski --file-regex 'Q4_K_M\\.gguf$'"
+  - "python scripts/browse_models.py --tags gguf text-generation --limit 30"
+  - "python scripts/browse_models.py --author unsloth --file-regex '.*14B.*Q4.*' --yaml"

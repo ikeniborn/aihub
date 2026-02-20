@@ -42,19 +42,15 @@ source_suffix = {
     ".md": "markdown",
 }
 
-# Exclude patterns (relative to source root = project root)
+# Exclude patterns (relative to source root = docs/)
 exclude_patterns = [
-    "docs/sphinx/_build",
+    "sphinx/_build",
+    "sphinx/index.md",
     "Thumbs.db",
     ".DS_Store",
-    ".venv",
-    "models",
-    "scripts/__pycache__",
-    "**/__pycache__",
-    "*.pyc",
-    "docs/llms.txt",
-    "docs/llms-full.txt",
-    "docs/plans",
+    "plans",
+    "llms.txt",
+    "llms-full.txt",
 ]
 
 # -- HTML output ---------------------------------------------------------------
@@ -67,8 +63,9 @@ html_theme_options = {
     "navigation_with_keys": True,
 }
 
-# Master document — relative to source directory (project root when built with -c)
-master_doc = "docs/sphinx/index"
+# Root document — relative to source directory (docs/ when built with -c docs/sphinx/)
+# Build script uses docs/ as source root when root_doc is set in conf.py
+root_doc = "index"
 
 # -- sphinx-llms-txt -----------------------------------------------------------
 # AI-first documentation: generates llms.txt and llms-full.txt

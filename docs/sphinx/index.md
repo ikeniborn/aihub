@@ -10,23 +10,24 @@ title: aihub Documentation
 :maxdepth: 2
 :caption: Documentation
 
-../../README
-../GUIDES
+/GUIDES
+/TROUBLESHOOTING
 ```
 
 ```{toctree}
 :maxdepth: 2
 :caption: Architecture
 
-../architecture/diagrams/dependency-graph
-../architecture/diagrams/data-flow-download
+/architecture/README
+/architecture/diagrams/dependency-graph
+/architecture/diagrams/data-flow-download
 ```
 
 ```{toctree}
 :maxdepth: 1
 :caption: Reference
 
-../compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown
+/compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown
 ```
 
 ---

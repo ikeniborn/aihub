@@ -24,9 +24,15 @@ list:
 browse:
 	$(VENV_PYTHON) scripts/browse_models.py
 
-## ui — запустить веб-интерфейс (http://localhost:9000)
+## ui — запустить веб-интерфейс и открыть браузер
+##      PORT=9000  HOST=127.0.0.1  CONFIG=models.yaml
+##      Пример: make ui PORT=9001
+PORT   ?= 9000
+HOST   ?= 127.0.0.1
+CONFIG ?= models.yaml
+
 ui:
-	$(VENV_PYTHON) scripts/model_browser.py
+	$(VENV_PYTHON) scripts/model_browser.py --port $(PORT) --host $(HOST) --config $(CONFIG) --open
 
 ## update — обновить все пакеты до последних версий
 update:

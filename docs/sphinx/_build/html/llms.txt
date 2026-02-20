@@ -4,9 +4,10 @@
 
 ## Docs
 
-- [aihub](/_sources/docs/sphinx/index.md.txt)
-- [aihub](/_sources/README.md.txt)
-- [Руководство пользователя aihub](/_sources/docs/GUIDES.md.txt)
-- [Data Flow — Model Download Pipeline](/_sources/docs/architecture/diagrams/data-flow-download.md.txt)
-- [Dependency Graph — aihub](/_sources/docs/architecture/diagrams/dependency-graph.md.txt)
-- [Полное руководство по локальным AI-моделям в 2025–2026](/_sources/docs/compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.md.txt)
+- [aihub](/_sources/index.md.txt)
+- [Руководство пользователя aihub](/_sources/GUIDES.md.txt)
+- [Устранение неполадок (Troubleshooting)](/_sources/TROUBLESHOOTING.md.txt)
+- [Architecture Documentation — aihub](/_sources/architecture/README.md.txt)
+- [Dependency Graph — aihub](/_sources/architecture/diagrams/dependency-graph.md.txt)
+- [Data Flow — Model Download Pipeline](/_sources/architecture/diagrams/data-flow-download.md.txt)
+- [Полное руководство по локальным AI-моделям в 2025–2026](/_sources/compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.md.txt)

@@ -3,7 +3,7 @@
   <head><meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="color-scheme" content="light dark"><meta name="viewport" content="width=device-width, initial-scale=1" />
-<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html">
+<link rel="index" title="Index" href="genindex.html"><link rel="search" title="Search" href="search.html"><link rel="next" title="Руководство пользователя aihub" href="GUIDES.html">
 
     <!-- Generated with Sphinx 9.1.0 and Furo 2025.12.19 -->
         <title>aihub Documentation</title>
@@ -192,7 +192,22 @@
   <input type="hidden" name="area" value="default">
 </form>
 <div id="searchbox"></div><div class="sidebar-scroll"><div class="sidebar-tree">
-  
+  <p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="GUIDES.html">Руководство пользователя aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="TROUBLESHOOTING.html">Устранение неполадок (Troubleshooting)</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture/README.html">Architecture Documentation — aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/dependency-graph.html">Dependency Graph — aihub</a></li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/data-flow-download.html">Data Flow — Model Download Pipeline</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.html">Полное руководство по локальным AI-моделям в 2025–2026</a></li>
+</ul>
+
 </div>
 </div>
 
@@ -233,6 +248,64 @@
 <h1>aihub<a class="headerlink" href="#aihub" title="Link to this heading">¶</a></h1>
 <p>Инструменты для загрузки открытых AI-моделей на локальный диск и синхронизации в S3-хранилище.</p>
 <div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Documentation</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="GUIDES.html">Руководство пользователя aihub</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id1">Содержание</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id2">1. Первоначальная настройка</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id7">2. Загрузка моделей</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id15">3. Управление списком через веб-интерфейс</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id19">4. Поиск новых моделей</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#s3">5. Синхронизация в S3</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id29">6. Обновление моделей</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#ci-cd">7. Работа в CI/CD</a></li>
+<li class="toctree-l2"><a class="reference internal" href="GUIDES.html#id34">8. Типовые сценарии</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="TROUBLESHOOTING.html">Устранение неполадок (Troubleshooting)</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#id1">Содержание</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#repository-not-found">1. 404 Repository Not Found</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#unauthorized">2. 401 Unauthorized — неверный токен</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#forbidden-gated">3. 403 Forbidden — gated-модель без принятия лицензии</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#hf-transfer-404">4. hf_transfer: ложные 404 и зависания</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#huggingface">5. Создание токена HuggingFace с нужными правами</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#id14">6. Файл скачивается, но пустой или обрезанный</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#rate-limit-429">7. Rate limit 429 — слишком много запросов</a></li>
+<li class="toctree-l2"><a class="reference internal" href="TROUBLESHOOTING.html#credentials-not-found">8. Credentials not found — токен не читается</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Architecture</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="architecture/README.html">Architecture Documentation — aihub</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#overview">Overview</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#component-dependency-graph">Component Dependency Graph</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#files">Files</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#architecture-layers">Architecture Layers</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#key-design-decisions">Key Design Decisions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/README.html#quality-attributes">Quality Attributes</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/dependency-graph.html">Dependency Graph — aihub</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/diagrams/dependency-graph.html#component-dependency-graph">Component Dependency Graph</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/diagrams/dependency-graph.html#makefile-script-mapping">Makefile → Script Mapping</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/diagrams/dependency-graph.html#credential-resolution-chain">Credential Resolution Chain</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="architecture/diagrams/data-flow-download.html">Data Flow — Model Download Pipeline</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="architecture/diagrams/data-flow-download.html#full-download-flow-with-s3-sync">Full Download Flow (with S3 sync)</a></li>
+<li class="toctree-l2"><a class="reference internal" href="architecture/diagrams/data-flow-download.html#web-ui-save-flow">Web UI Save Flow</a></li>
+</ul>
+</li>
+</ul>
+</div>
+<div class="toctree-wrapper compound">
+<p class="caption" role="heading"><span class="caption-text">Reference</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="compass_artifact_wf-df4f1b28-89d3-4e93-8ae4-94aca7c1f19b_text_markdown.html">Полное руководство по локальным AI-моделям в 2025–2026</a></li>
+</ul>
 </div>
 <hr class="docutils" />
 <div class="admonition note">
@@ -247,7 +320,15 @@ Use them for efficient navigation: <code class="docutils literal notranslate"><s
       <footer>
         
         <div class="related-pages">
-          
+          <a class="next-page" href="GUIDES.html">
+              <div class="page-info">
+                <div class="context">
+                  <span>Next</span>
+                </div>
+                <div class="title">Руководство пользователя aihub</div>
+              </div>
+              <svg class="furo-related-icon"><use href="#svg-arrow-right"></use></svg>
+            </a>
           
         </div>
         <div class="bottom-of-page">
