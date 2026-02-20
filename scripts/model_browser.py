@@ -63,7 +63,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 class DownloadState(TypedDict):
     running: bool
     cancelled: bool
-    process: Optional[Any]          # subprocess.Popen or None
+    process: Optional[subprocess.Popen[str]]  # active download process or None
     log: list[str]
     current: str                    # model name currently being downloaded
     progress: int                   # 0–100
@@ -229,20 +229,34 @@ HTML_PAGE = r"""<!DOCTYPE html>
   /* ── HF Search panel ── */
   .hf-panel { padding: 20px 24px; }
   .hf-search-form {
-    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start;
+    display: flex; flex-direction: column;
     background: var(--bg-surface); border: 1px solid var(--border);
-    border-radius: 8px; padding: 16px; margin-bottom: 14px;
+    border-radius: 8px; margin-bottom: 14px; overflow: hidden;
   }
+  /* Row 1: primary search fields */
+  .hf-search-row {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+    padding: 14px 16px;
+  }
+  /* Row 2: file & content filters */
+  .hf-filters-row {
+    display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start;
+    padding: 10px 16px 14px; border-top: 1px solid var(--border);
+    background: var(--bg-base);
+  }
+  .hf-filter-group { display: flex; flex-direction: column; gap: 5px; }
+  .hf-filter-group label { font-size: 0.72rem; color: var(--text-muted); }
+
   .hf-field { display: flex; flex-direction: column; gap: 4px; }
   .hf-field label { font-size: 0.75rem; color: var(--text-muted); }
-  .hf-field input {
+  .hf-field input, .hf-field select {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-primary); padding: 7px 12px; font-size: 0.875rem;
     outline: none; transition: border-color 0.15s;
   }
-  .hf-field input:focus { border-color: var(--accent); }
-  .hf-field input[type=text]   { width: 200px; }
-  .hf-field input[type=number] { width: 80px; }
+  .hf-field input:focus, .hf-field select:focus { border-color: var(--accent); }
+  .hf-field input[type=text]   { width: 180px; }
+  .hf-field input[type=number] { width: 70px; }
 
   /* ── Regex field with validator ── */
   .hf-field-regex { flex: 1; min-width: 260px; }
@@ -287,7 +301,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238898aa' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
     background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
   }
-  .hf-field select:focus { border-color: var(--accent); }
+  /* Size range inputs */
+  .size-range { display: flex; align-items: center; gap: 6px; }
+  .size-range input {
+    width: 75px; background: var(--bg-elevated); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text-primary); padding: 5px 8px;
+    font-size: 0.82rem; outline: none; transition: border-color 0.15s;
+  }
+  .size-range input:focus { border-color: var(--accent); }
+  .size-range span { color: var(--text-muted); font-size: 0.8rem; }
 
   #hf-search-status {
     min-height: 22px; font-size: 0.85rem; margin-bottom: 10px;
@@ -349,14 +371,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border-radius: 8px; margin: 10px 24px 0; padding: 14px 18px;
   }
   .download-panel-header {
-    display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
   }
-  .download-panel-header span { font-size: 0.82rem; color: var(--text-secondary); }
+  .download-panel-header > span:first-child { font-size: 0.82rem; color: var(--text-secondary); flex-shrink: 0; }
   .dl-current { font-size: 0.82rem; color: var(--accent); font-weight: 500; flex: 1;
-                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .dl-progress-track {
     background: var(--bg-elevated); border-radius: 4px; height: 6px;
-    margin-bottom: 10px; overflow: hidden;
+    margin-bottom: 8px; overflow: hidden;
   }
   .dl-progress-bar {
     background: var(--accent); height: 100%; border-radius: 4px;
@@ -366,8 +388,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
     color: var(--text-muted); font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem;
     height: 120px; overflow-y: auto; padding: 8px 10px; white-space: pre-wrap;
-    word-break: break-all;
+    word-break: break-all; resize: vertical; transition: height 0.2s ease;
   }
+  .dl-log--expanded { height: 55vh; }
+  .dl-icon-btn {
+    background: none; border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-muted); font-size: 0.72rem; cursor: pointer; padding: 2px 7px;
+    transition: color 0.13s, border-color 0.13s; white-space: nowrap; flex-shrink: 0;
+  }
+  .dl-icon-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .dl-icon-btn.cancel { border-color: #553030; color: var(--red); }
+  .dl-icon-btn.cancel:hover { border-color: var(--red); background: #3a1a1a; }
   .dl-badge {
     display: inline-block; border-radius: 3px; padding: 1px 6px;
     font-size: 0.65rem; font-weight: 700; white-space: nowrap;
@@ -375,6 +406,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .dl-badge-dl   { background: #1a3a2a; color: var(--green); }
   .dl-badge-skip { background: #252a38; color: var(--text-muted); }
   .dl-badge-err  { background: #3a1a1a; color: var(--red); }
+
+  /* ── Download log line colors ── */
+  .dl-log .log-skip { color: #718096; font-style: italic; }
+  .dl-log .log-ok   { color: var(--green); }
+  .dl-log .log-err  { color: var(--red); }
+  .dl-log .log-warn { color: var(--yellow); }
 </style>
 </head>
 <body>
@@ -408,6 +445,8 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <span>Загрузка:</span>
       <span class="dl-current" id="dl-current">—</span>
       <span id="dl-counter" style="font-size:0.78rem;color:var(--text-muted)"></span>
+      <button class="dl-icon-btn" id="dl-expand-btn" onclick="dlToggleLog()" title="Развернуть / свернуть лог">⤢ Развернуть</button>
+      <button class="dl-icon-btn cancel" id="dl-cancel-btn-panel" onclick="dlCancel()" style="display:none">✕ Отменить</button>
     </div>
     <div class="dl-progress-track">
       <div class="dl-progress-bar" id="dl-progress-bar"></div>
@@ -439,70 +478,80 @@ HTML_PAGE = r"""<!DOCTYPE html>
   <div class="hf-panel">
 
     <div class="hf-search-form">
-      <div class="hf-field">
-        <label>Запрос</label>
-        <input type="text" id="hf-query" placeholder="llama, qwen, deepseek..." onkeydown="if(event.key==='Enter')hfSearch()">
+      <!-- Строка 1: основные поля поиска -->
+      <div class="hf-search-row">
+        <div class="hf-field">
+          <label>Запрос</label>
+          <input type="text" id="hf-query" placeholder="llama, qwen, deepseek..." onkeydown="if(event.key==='Enter')hfSearch()">
+        </div>
+        <div class="hf-field">
+          <label>Автор</label>
+          <input type="text" id="hf-author" placeholder="bartowski, unsloth..." onkeydown="if(event.key==='Enter')hfSearch()">
+        </div>
+        <div class="hf-field">
+          <label>Тип задачи</label>
+          <select id="hf-pipeline-tag">
+            <option value="">— любой —</option>
+            <option value="text-generation">Текстовая генерация (LLM)</option>
+            <option value="text-to-image">Генерация изображений</option>
+            <option value="image-to-text">Описание изображений</option>
+            <option value="automatic-speech-recognition">Распознавание речи (ASR)</option>
+            <option value="text-to-speech">Синтез речи (TTS)</option>
+            <option value="feature-extraction">Эмбеддинги</option>
+            <option value="sentence-similarity">Семантическое сходство</option>
+            <option value="translation">Перевод</option>
+            <option value="text-classification">Классификация текста</option>
+            <option value="zero-shot-classification">Zero-shot классификация</option>
+          </select>
+        </div>
+        <div class="hf-field">
+          <label>Лимит</label>
+          <input type="number" id="hf-limit" value="20" min="1" max="50">
+        </div>
+        <button class="btn-primary" id="hf-search-btn" onclick="hfSearch()" style="align-self:flex-end">Искать</button>
       </div>
-      <div class="hf-field">
-        <label>Автор</label>
-        <input type="text" id="hf-author" placeholder="bartowski, unsloth..." onkeydown="if(event.key==='Enter')hfSearch()">
-      </div>
-      <div class="hf-field hf-field-regex">
-        <label>Regex файлов <span id="hf-regex-hint" style="font-size:0.65rem;color:var(--text-muted);margin-left:4px"></span></label>
-        <input type="text" id="hf-file-regex" placeholder="Q4_K_M\.gguf$"
-               oninput="onRegexInput()" onkeydown="if(event.key==='Enter')hfSearch()">
-        <div id="hf-regex-error" class="regex-error" style="display:none"></div>
-        <div class="regex-presets">
-          <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$')"        title="Квантизация Q4_K_M">Q4_K_M</span>
-          <span class="regex-chip" onclick="setRegexPreset('Q8_0\\.gguf$')"          title="Квантизация Q8_0">Q8_0</span>
-          <span class="regex-chip" onclick="setRegexPreset('Q5_K_M\\.gguf$')"        title="Квантизация Q5_K_M">Q5_K_M</span>
-          <span class="regex-chip" onclick="setRegexPreset('Q6_K\\.gguf$')"          title="Квантизация Q6_K">Q6_K</span>
-          <span class="regex-chip" onclick="setRegexPreset('IQ4_XS\\.gguf$')"        title="iMatrix Q4 XS">IQ4_XS</span>
-          <span class="regex-chip" onclick="setRegexPreset('IQ4_NL\\.gguf$')"        title="iMatrix Q4 NL">IQ4_NL</span>
-          <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$|Q8_0\\.gguf$')"  title="Q4_K_M или Q8_0">Q4|Q8</span>
-          <span class="regex-chip" onclick="setRegexPreset('\\.gguf$')"              title="Все GGUF файлы">.gguf</span>
-          <span class="regex-chip" onclick="setRegexPreset('\\.safetensors$')"       title="Safetensors файлы">.safetensors</span>
-          <span class="regex-chip chip-clear" onclick="setRegexPreset('')"           title="Очистить поле">✕ сбросить</span>
+      <!-- Строка 2: фильтры по файлам -->
+      <div class="hf-filters-row">
+        <div class="hf-filter-group hf-field-regex">
+          <label>Regex файлов <span id="hf-regex-hint" style="font-size:0.65rem;color:var(--text-muted);margin-left:4px"></span></label>
+          <input type="text" id="hf-file-regex" placeholder="Q4_K_M\.gguf$"
+                 oninput="onRegexInput()" onkeydown="if(event.key==='Enter')hfSearch()">
+          <div id="hf-regex-error" class="regex-error" style="display:none"></div>
+          <div class="regex-presets">
+            <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$')"        title="Квантизация Q4_K_M">Q4_K_M</span>
+            <span class="regex-chip" onclick="setRegexPreset('Q8_0\\.gguf$')"          title="Квантизация Q8_0">Q8_0</span>
+            <span class="regex-chip" onclick="setRegexPreset('Q5_K_M\\.gguf$')"        title="Квантизация Q5_K_M">Q5_K_M</span>
+            <span class="regex-chip" onclick="setRegexPreset('Q6_K\\.gguf$')"          title="Квантизация Q6_K">Q6_K</span>
+            <span class="regex-chip" onclick="setRegexPreset('IQ4_XS\\.gguf$')"        title="iMatrix Q4 XS">IQ4_XS</span>
+            <span class="regex-chip" onclick="setRegexPreset('IQ4_NL\\.gguf$')"        title="iMatrix Q4 NL">IQ4_NL</span>
+            <span class="regex-chip" onclick="setRegexPreset('Q4_K_M\\.gguf$|Q8_0\\.gguf$')"  title="Q4_K_M или Q8_0">Q4|Q8</span>
+            <span class="regex-chip" onclick="setRegexPreset('\\.gguf$')"              title="Все GGUF файлы">.gguf</span>
+            <span class="regex-chip" onclick="setRegexPreset('\\.safetensors$')"       title="Safetensors файлы">.safetensors</span>
+            <span class="regex-chip chip-clear" onclick="setRegexPreset('')"           title="Очистить поле">✕ сбросить</span>
+          </div>
+        </div>
+        <div class="hf-filter-group">
+          <label>Язык</label>
+          <div class="filter-chips" id="lang-chips">
+            <span class="filter-chip active" data-lang="" onclick="toggleLangChip(this)">Любой</span>
+            <span class="filter-chip" data-lang="ru" onclick="toggleLangChip(this)">🇷🇺 ru</span>
+            <span class="filter-chip" data-lang="en" onclick="toggleLangChip(this)">🇬🇧 en</span>
+            <span class="filter-chip" data-lang="zh" onclick="toggleLangChip(this)">🇨🇳 zh</span>
+            <span class="filter-chip" data-lang="ja" onclick="toggleLangChip(this)">🇯🇵 ja</span>
+            <span class="filter-chip" data-lang="de" onclick="toggleLangChip(this)">🇩🇪 de</span>
+            <span class="filter-chip" data-lang="fr" onclick="toggleLangChip(this)">🇫🇷 fr</span>
+          </div>
+        </div>
+        <div class="hf-filter-group">
+          <label>Размер файла, МБ</label>
+          <div class="size-range">
+            <input type="number" id="hf-min-size" placeholder="от" min="0" step="100" oninput="hfApplySizeFilter()">
+            <span>–</span>
+            <input type="number" id="hf-max-size" placeholder="до" min="0" step="100" oninput="hfApplySizeFilter()">
+            <span style="color:var(--text-muted);font-size:0.72rem">МБ</span>
+          </div>
         </div>
       </div>
-      <div class="hf-field">
-        <label>Тип задачи</label>
-        <select id="hf-pipeline-tag">
-          <option value="">— любой —</option>
-          <option value="text-generation">Текстовая генерация (LLM)</option>
-          <option value="text-to-image">Генерация изображений</option>
-          <option value="image-to-text">Описание изображений</option>
-          <option value="automatic-speech-recognition">Распознавание речи (ASR)</option>
-          <option value="text-to-speech">Синтез речи (TTS)</option>
-          <option value="feature-extraction">Эмбеддинги</option>
-          <option value="sentence-similarity">Семантическое сходство</option>
-          <option value="translation">Перевод</option>
-          <option value="text-classification">Классификация текста</option>
-          <option value="zero-shot-classification">Zero-shot классификация</option>
-        </select>
-      </div>
-      <div class="hf-field">
-        <label>Язык <span style="font-size:0.65rem;color:var(--text-muted)">(ISO 639-1)</span></label>
-        <input type="text" id="hf-language" placeholder="ru, en, zh..." maxlength="20"
-               onkeydown="if(event.key==='Enter')hfSearch()" style="width:120px">
-        <div class="filter-chips" id="lang-chips">
-          <span class="filter-chip" onclick="toggleLangChip(this,'ru')">🇷🇺 ru</span>
-          <span class="filter-chip" onclick="toggleLangChip(this,'en')">🇬🇧 en</span>
-          <span class="filter-chip" onclick="toggleLangChip(this,'zh')">🇨🇳 zh</span>
-          <span class="filter-chip" onclick="toggleLangChip(this,'ja')">🇯🇵 ja</span>
-          <span class="filter-chip" onclick="toggleLangChip(this,'de')">🇩🇪 de</span>
-          <span class="filter-chip" onclick="toggleLangChip(this,'fr')">🇫🇷 fr</span>
-        </div>
-      </div>
-      <div class="hf-field">
-        <label>Лимит</label>
-        <input type="number" id="hf-limit" value="20" min="1" max="50">
-      </div>
-      <div class="hf-field">
-        <label>Макс. размер (GB)</label>
-        <input type="number" id="hf-max-size" placeholder="∞" min="0" step="0.5" oninput="hfApplySizeFilter()">
-      </div>
-      <button class="btn-primary" id="hf-search-btn" onclick="hfSearch()">Искать</button>
     </div>
 
     <div id="hf-search-status"></div>
@@ -806,17 +855,9 @@ function setRegexPreset(pattern) {
   input.focus();
 }
 
-function toggleLangChip(chip, code) {
-  const input = document.getElementById('hf-language');
-  const active = chip.classList.contains('active');
-  // Deactivate all chips
+function toggleLangChip(chip) {
   document.querySelectorAll('#lang-chips .filter-chip').forEach(c => c.classList.remove('active'));
-  if (active) {
-    input.value = '';
-  } else {
-    chip.classList.add('active');
-    input.value = code;
-  }
+  chip.classList.add('active');
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -831,7 +872,8 @@ async function hfSearch() {
   const author      = document.getElementById('hf-author').value.trim();
   const fileRegex   = document.getElementById('hf-file-regex').value.trim();
   const pipelineTag = document.getElementById('hf-pipeline-tag').value;
-  const language    = document.getElementById('hf-language').value.trim();
+  const activeLangChip = document.querySelector('#lang-chips .filter-chip.active');
+  const language    = activeLangChip ? activeLangChip.dataset.lang : '';
   const limit       = Math.min(50, Math.max(1, parseInt(document.getElementById('hf-limit').value) || 20));
 
   if (!q && !author && !fileRegex && !pipelineTag && !language) {
@@ -996,28 +1038,29 @@ function hfToggleAll(masterCb) {
 }
 
 function hfApplySizeFilter() {
-  const maxGbVal = document.getElementById('hf-max-size').value.trim();
-  const maxBytes = maxGbVal !== '' ? parseFloat(maxGbVal) * 1024 * 1024 * 1024 : null;
+  const minMbVal = document.getElementById('hf-min-size').value.trim();
+  const maxMbVal = document.getElementById('hf-max-size').value.trim();
+  const MB = 1024 * 1024;
+  const minBytes = minMbVal !== '' ? parseFloat(minMbVal) * MB : null;
+  const maxBytes = maxMbVal !== '' ? parseFloat(maxMbVal) * MB : null;
+  const hasFilter = (minBytes !== null && !isNaN(minBytes)) || (maxBytes !== null && !isNaN(maxBytes));
   document.querySelectorAll('#hf-results-body tr').forEach(tr => {
-    if (maxBytes === null || isNaN(maxBytes)) {
-      tr.style.display = '';
-      return;
-    }
     const sizeBytes = tr.dataset.sizeBytes != null ? parseFloat(tr.dataset.sizeBytes) : null;
-    // Hide only rows where size is known AND exceeds the limit
-    if (sizeBytes != null && sizeBytes > maxBytes) {
-      tr.style.display = 'none';
-      // Uncheck and deselect if hidden
+    let hide = false;
+    // Hide only rows where size is known AND violates the filter
+    if (hasFilter && sizeBytes != null) {
+      if (minBytes !== null && !isNaN(minBytes) && sizeBytes < minBytes) hide = true;
+      if (maxBytes !== null && !isNaN(maxBytes) && sizeBytes > maxBytes) hide = true;
+    }
+    tr.style.display = hide ? 'none' : '';
+    if (hide) {
       const cb = tr.querySelector('.select-cb');
       if (cb && cb.checked) {
         cb.checked = false;
         hfSelected.delete(cb.dataset.key);
       }
-    } else {
-      tr.style.display = '';
     }
   });
-  // Update add button state
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
 }
 
@@ -1091,6 +1134,13 @@ function setAddStatus(html, isErr) {
   el.style.display = html ? '' : 'none';
 }
 
+function dlToggleLog() {
+  const logEl = document.getElementById('dl-log');
+  const btn = document.getElementById('dl-expand-btn');
+  const expanded = logEl.classList.toggle('dl-log--expanded');
+  btn.textContent = expanded ? '⤡ Свернуть' : '⤢ Развернуть';
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  Download — SSE client
 // ═══════════════════════════════════════════════════════════════════
@@ -1129,6 +1179,8 @@ async function dlStart() {
   cancelBtn.style.display = '';
   cancelBtn.disabled = false;
   panel.style.display = '';
+  document.getElementById('dl-cancel-btn-panel').style.display = '';
+  document.getElementById('dl-cancel-btn-panel').disabled = false;
   _dlLastData = null;
   document.getElementById('dl-log').textContent = '';
   document.getElementById('dl-current').textContent = '—';
@@ -1157,11 +1209,19 @@ async function dlStart() {
         d.done_count + ' / ' + d.model_count;
     }
 
-    // Update log (full replacement to avoid delta sync issues when log is bounded server-side)
+    // Update log: smart scroll (auto-scroll only if already at bottom) + colored lines
     if (d.log && d.log.length > 0) {
       const logEl = document.getElementById('dl-log');
-      logEl.textContent = d.log.join('\n');
-      logEl.scrollTop = logEl.scrollHeight;
+      const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+      logEl.innerHTML = d.log.map(line => {
+        let cls = '';
+        if (/\[SKIP\]/.test(line))   cls = 'log-skip';
+        else if (/\[OK\]/.test(line)) cls = 'log-ok';
+        else if (/\[ERR/.test(line))  cls = 'log-err';
+        else if (/\[WORKER/.test(line)) cls = 'log-warn';
+        return cls ? `<span class="${cls}">${escHtml(line)}</span>` : escHtml(line);
+      }).join('\n');
+      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
     }
 
     // Save last snapshot for completion summary
@@ -1186,6 +1246,7 @@ function dlDone() {
 
   document.getElementById('dl-progress-bar').style.width = '100%';
   cancelBtn.style.display = 'none';
+  document.getElementById('dl-cancel-btn-panel').style.display = 'none';
   startBtn.style.display  = '';
   startBtn.disabled = false;
 
@@ -1211,8 +1272,8 @@ function dlDone() {
 }
 
 async function dlCancel() {
-  const cancelBtn = document.getElementById('dl-cancel-btn');
-  cancelBtn.disabled = true;
+  document.getElementById('dl-cancel-btn').disabled = true;
+  document.getElementById('dl-cancel-btn-panel').disabled = true;
   try {
     await fetch('/api/download/cancel', { method: 'POST' });
   } catch (_) {}
@@ -1557,8 +1618,11 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/download/stream":
             self._send_sse_headers()
+            # Defensive deadline: auto-close stream after 2 hours even if
+            # running flag is never cleared (guards against worker crash edge cases).
+            deadline = time.time() + 7200
             try:
-                while True:
+                while time.time() < deadline:
                     with _dl_lock:
                         snapshot = {
                             "running": download_state["running"],
@@ -1577,7 +1641,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                         break
                     time.sleep(0.5)
             except (BrokenPipeError, ConnectionResetError):
-                pass  # Client disconnected
+                pass  # Client disconnected — download continues in background
 
         else:
             self._send_json({"error": "Not found"}, status=404)
