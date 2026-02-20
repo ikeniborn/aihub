@@ -5,6 +5,9 @@ settings:
   retry_count: 3
   retry_delay: 5.0
   inter_download_delay: 60
+  bandwidth_limit_mbps: 50
+  hf_download_concurrency: 2
+  download_timeout_hours: 2
   s3:
     sync_after_download: false
 models:
@@ -187,10 +190,25 @@ models:
   description: nomic-embed-code v1 GGUF i1-Q4_K_M — code embedding model (Nomic AI)
 - repo_id: unsloth/Qwen3-Coder-Next-GGUF
   filename: Qwen3-Coder-Next-Q4_K_M.gguf
-  dest_dir: misc
+  dest_dir: llm/code
+  enabled: false
+  gated: false
+  tags:
+  - llm
+  - code
+  - apache-2.0
+  vram_gb: 45.0
+  description: Qwen3-Coder-Next Q4_K_M — Unsloth/Qwen, Apache 2.0; next-gen code LLM
+- repo_id: bartowski/Mistral-Nemo-Instruct-2407-GGUF
+  filename: Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
+  dest_dir: llm/mistral
   enabled: true
   gated: false
   tags:
+  - llm
+  - chat
+  - multilingual
+  - 12b
   - apache-2.0
-  vram_gb: 0.0
-  description: Qwen3-Coder-Next [apache-2.0]
+  vram_gb: 7.7
+  description: Mistral NeMo 12B Instruct Q4_K_M — Mistral AI, Apache 2.0; multilingual
