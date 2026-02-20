@@ -5,18 +5,23 @@ AI Model Browser — Web UI
 HTTP-сервер для просмотра и управления AI-моделями из models.yaml.
 
 Использует только Python stdlib (http.server, json, pathlib, tempfile, os).
-Без Flask/FastAPI, без внешних зависимостей.
+Без Flask/FastAPI, без внешних зависимостей (кроме huggingface_hub для поиска).
 
 Запуск:
     python scripts/model_browser.py
     python scripts/model_browser.py --port 9000
-    python scripts/model_browser.py --config models.yaml --port 9000
+    python scripts/model_browser.py --config models.yaml --port 9000 --open
 
 Открыть в браузере: http://localhost:9000
 
 API:
-    GET  /api/models  — список моделей с размерами файлов на диске
-    POST /api/save    — обновить enabled в models.yaml атомарно
+    GET  /api/models              — список моделей с размерами файлов на диске
+    POST /api/save                — обновить enabled в models.yaml атомарно
+    GET  /api/search?q=&author=&file_regex=&limit=  — поиск на HuggingFace Hub
+    POST /api/add                 — добавить модели из результатов поиска в models.yaml
+    GET  /api/download/start      — запустить загрузку enabled моделей в фоновом потоке
+    GET  /api/download/stream     — SSE поток прогресса загрузки (running, current, log, status_map)
+    POST /api/download/cancel     — отменить текущую загрузку
 """
 
 from __future__ import annotations
@@ -24,17 +29,49 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
+import re
+import subprocess
 import sys
 import tempfile
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingMixIn
 from pathlib import Path
 from typing import Any, Optional, Union
+from urllib.parse import urlparse, parse_qs
 
 import yaml
 
 # Shared utilities
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import fmt_size  # noqa: E402
+from utils import fmt_size, load_hf_token  # noqa: E402
+
+
+# ─── Threaded HTTP server ──────────────────────────────────────────────────────
+
+
+class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTP-сервер с поддержкой параллельных запросов (для медленного HF API)."""
+
+    daemon_threads = True
+
+
+# ─── Download State ────────────────────────────────────────────────────────────
+
+_dl_lock: threading.Lock = threading.Lock()
+download_state: dict = {
+    "running": False,
+    "cancelled": False,
+    "process": None,
+    "log": [],
+    "current": "",
+    "progress": 0,
+    "model_count": 0,
+    "done_count": 0,
+    "status_map": {},   # repo_id/filename → "DOWNLOAD"|"SKIP"|"ERROR"
+}
 
 
 # ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -46,131 +83,421 @@ HTML_PAGE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Model Browser</title>
 <style>
+  :root {
+    --bg-base:     #13161f;
+    --bg-surface:  #1c2030;
+    --bg-elevated: #1e2840;
+    --border:      #2e3a52;
+    --text-primary:   #e2e8f0;
+    --text-secondary: #a8b8d0;
+    --text-muted:     #8898aa;
+    --accent:      #a78bfa;
+    --accent-dark: #6d28d9;
+    --accent-hover:#7c3aed;
+    --green:  #68d391;
+    --red:    #fc8181;
+    --yellow: #fcd34d;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-         background: #0f1117; color: #e2e8f0; min-height: 100vh; }
-  header { background: #1a1d27; border-bottom: 1px solid #2d3748; padding: 16px 24px;
-           display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  header h1 { font-size: 1.25rem; font-weight: 700; color: #a78bfa; white-space: nowrap; }
-  .controls { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; align-items: center; }
-  .controls input[type=text] {
-    background: #2d3748; border: 1px solid #4a5568; border-radius: 6px;
-    color: #e2e8f0; padding: 6px 12px; font-size: 0.875rem; width: 220px;
+         background: var(--bg-base); color: var(--text-primary); min-height: 100vh; }
+
+  /* ── Header ── */
+  header { background: var(--bg-surface); border-bottom: 1px solid var(--border);
+           padding: 12px 24px; display: flex; align-items: center; gap: 12px; }
+  header h1 { font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+
+  /* ── Tabs ── */
+  .tabs { display: flex; background: var(--bg-surface);
+          border-bottom: 1px solid var(--border); padding: 0 24px; }
+  .tab-btn { background: none; border: none; border-bottom: 2px solid transparent;
+             color: var(--text-muted); padding: 10px 20px; font-size: 0.875rem;
+             font-weight: 500; cursor: pointer; transition: all 0.15s; margin-bottom: -1px; }
+  .tab-btn:hover { color: var(--text-secondary); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ── Controls bar (tab: Мои модели) ── */
+  .controls-bar { background: var(--bg-surface); border-bottom: 1px solid var(--border);
+                  padding: 10px 24px; display: flex; align-items: center;
+                  gap: 10px; flex-wrap: wrap; }
+  .controls-bar input[type=text] {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-primary); padding: 6px 12px; font-size: 0.875rem; width: 220px;
     outline: none; transition: border-color 0.15s;
   }
-  .controls input[type=text]:focus { border-color: #a78bfa; }
+  .controls-bar input[type=text]:focus { border-color: var(--accent); }
+
+  /* ── Tag filter ── */
   .tag-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
   .tag-btn {
-    background: #2d3748; border: 1px solid #4a5568; border-radius: 4px;
-    color: #94a3b8; padding: 4px 10px; font-size: 0.75rem; cursor: pointer;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 4px;
+    color: var(--text-muted); padding: 4px 10px; font-size: 0.75rem; cursor: pointer;
     transition: all 0.15s; white-space: nowrap;
   }
-  .tag-btn:hover { border-color: #a78bfa; color: #c4b5fd; }
-  .tag-btn.active { background: #4c1d95; border-color: #a78bfa; color: #ede9fe; }
+  .tag-btn:hover { border-color: var(--accent); color: #c4b5fd; }
+  .tag-btn.active { background: #3b1f8c; border-color: var(--accent); color: #ede9fe; }
+
+  /* ── Toggle label ── */
   .toggle-label {
     display: flex; align-items: center; gap: 6px; cursor: pointer;
-    font-size: 0.8rem; color: #94a3b8; white-space: nowrap; user-select: none;
+    font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; user-select: none;
   }
-  .toggle-label input { accent-color: #a78bfa; width: 15px; height: 15px; }
-  .save-btn {
-    background: #6d28d9; border: none; border-radius: 6px; color: #fff;
-    padding: 7px 20px; font-size: 0.875rem; font-weight: 600; cursor: pointer;
-    transition: background 0.15s; white-space: nowrap; margin-left: auto;
+  .toggle-label input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+  /* ── Buttons ── */
+  .btn-primary {
+    background: var(--accent-dark); border: none; border-radius: 6px; color: #fff;
+    padding: 7px 18px; font-size: 0.875rem; font-weight: 600; cursor: pointer;
+    transition: background 0.15s; white-space: nowrap;
   }
-  .save-btn:hover { background: #7c3aed; }
-  .save-btn:disabled { background: #4a5568; cursor: not-allowed; opacity: 0.6; }
-  .save-msg { font-size: 0.8rem; color: #68d391; display: none; }
-  main { padding: 20px 24px; }
-  .stats { font-size: 0.8rem; color: #718096; margin-bottom: 14px; }
+  .btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+  .btn-primary:disabled { background: var(--border); cursor: not-allowed; opacity: 0.6; }
+  .btn-secondary {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-secondary); padding: 7px 18px; font-size: 0.875rem;
+    cursor: pointer; transition: all 0.15s; white-space: nowrap;
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Status messages ── */
+  .status-msg { font-size: 0.8rem; display: none; }
+  .status-msg.ok  { color: var(--green);  display: inline; }
+  .status-msg.err { color: var(--red);    display: inline; }
+
+  /* ── Main content ── */
+  main { padding: 16px 24px; }
+  .stats { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 12px; }
+
+  /* ── Table ── */
   table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
   th {
-    background: #1a1d27; color: #94a3b8; font-weight: 600; text-align: left;
-    padding: 10px 12px; border-bottom: 2px solid #2d3748; position: sticky;
-    top: 0; z-index: 10; white-space: nowrap;
+    background: var(--bg-surface); color: var(--text-secondary); font-weight: 600;
+    text-align: left; padding: 10px 12px; border-bottom: 2px solid var(--border);
+    position: sticky; top: 0; z-index: 10; white-space: nowrap;
   }
-  td { padding: 9px 12px; border-bottom: 1px solid #1e2533; vertical-align: top; }
-  tr:hover td { background: #1a1f2e; }
-  tr.row-disabled td { opacity: 0.45; }
-  tr.row-disabled:hover td { background: #161b28; }
+  td { padding: 9px 12px; border-bottom: 1px solid #1d2438; vertical-align: top; }
+  tr:hover td { background: var(--bg-elevated); }
+  tr.row-disabled td { opacity: 0.40; }
+  tr.row-disabled:hover td { background: #181e2e; }
+
+  /* ── Status dot ── */
   .status-dot {
     display: inline-block; width: 9px; height: 9px; border-radius: 50%;
     margin-right: 6px; vertical-align: middle; flex-shrink: 0;
   }
   .dot-downloaded { background: #48bb78; box-shadow: 0 0 5px #48bb7866; }
-  .dot-notfound   { background: #4a5568; }
+  .dot-notfound   { background: #5a6a82; }
+
+  /* ── My-models cell styles ── */
   .cell-filename { font-family: 'SF Mono', Consolas, monospace; font-size: 0.78rem;
-                   color: #a0aec0; max-width: 220px; word-break: break-all; }
-  .cell-repo { color: #a78bfa; font-size: 0.8rem; }
+                   color: var(--text-secondary); max-width: 220px; word-break: break-all; }
+  .cell-repo { color: var(--accent); font-size: 0.82rem; font-weight: 500; }
+  .cell-repo a { color: inherit; text-decoration: none; }
+  .cell-repo a:hover { text-decoration: underline; }
   .cell-size { font-family: monospace; font-size: 0.82rem; white-space: nowrap; }
-  .cell-size.downloaded { color: #68d391; }
-  .cell-size.notfound   { color: #4a5568; }
+  .cell-size.downloaded { color: var(--green); }
+  .cell-size.notfound   { color: #5a6a82; }
   .tags-cell { display: flex; flex-wrap: wrap; gap: 4px; }
   .tag {
-    background: #2d3748; border-radius: 3px; padding: 2px 7px;
-    font-size: 0.7rem; color: #94a3b8; white-space: nowrap;
+    background: #243050; border-radius: 3px; padding: 2px 7px;
+    font-size: 0.7rem; color: #a8c0e0; white-space: nowrap;
   }
-  .vram { font-size: 0.78rem; color: #718096; white-space: nowrap; }
-  .desc { color: #718096; font-size: 0.78rem; max-width: 260px; }
+  .vram { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; }
+  .desc { color: var(--text-muted); font-size: 0.78rem; max-width: 260px; }
   .gated-badge {
-    display: inline-block; background: #744210; color: #fcd34d;
+    display: inline-block; background: #744210; color: var(--yellow);
     border-radius: 3px; padding: 1px 6px; font-size: 0.65rem; font-weight: 700;
     margin-left: 4px; vertical-align: middle;
   }
-  .enabled-cb { accent-color: #a78bfa; width: 16px; height: 16px; cursor: pointer; }
-  #empty-msg { text-align: center; color: #4a5568; padding: 40px; font-size: 0.9rem; }
+  .enabled-cb { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
+  #empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; }
+
+  /* ── HF Search panel ── */
+  .hf-panel { padding: 20px 24px; }
+  .hf-search-form {
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end;
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 14px;
+  }
+  .hf-field { display: flex; flex-direction: column; gap: 4px; }
+  .hf-field label { font-size: 0.75rem; color: var(--text-muted); }
+  .hf-field input {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-primary); padding: 7px 12px; font-size: 0.875rem;
+    outline: none; transition: border-color 0.15s;
+  }
+  .hf-field input:focus { border-color: var(--accent); }
+  .hf-field input[type=text]   { width: 200px; }
+  .hf-field input[type=number] { width: 80px; }
+
+  #hf-search-status {
+    min-height: 22px; font-size: 0.85rem; margin-bottom: 10px;
+    display: flex; align-items: center; gap: 8px; color: var(--text-muted);
+  }
+  #hf-search-status.err { color: var(--red); }
+
+  /* Spinner */
+  .spinner {
+    display: inline-block; width: 15px; height: 15px;
+    border: 2px solid var(--border); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── HF Results ── */
+  #hf-results-wrapper { display: none; }
+  .hf-results-controls {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  #hf-results-count { font-size: 0.8rem; color: var(--text-muted); }
+
+  .cell-hf-repo { color: var(--accent); font-size: 0.82rem; font-weight: 500; }
+  .cell-hf-repo a { color: inherit; text-decoration: none; }
+  .cell-hf-repo a:hover { text-decoration: underline; }
+  .cell-hf-files { font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem;
+                   color: var(--text-secondary); }
+  .file-item { display: block; padding: 1px 0; }
+  .downloads { font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; }
+  .select-cb { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+  #hf-empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; display: none; }
+
+  /* ── HF Add form ── */
+  .hf-add-form {
+    display: none; background: var(--bg-surface);
+    border: 1px solid var(--accent); border-radius: 8px;
+    padding: 18px; margin-top: 16px;
+  }
+  .hf-add-form h3 { font-size: 0.95rem; color: var(--text-secondary); margin-bottom: 14px; }
+  .hf-add-fields { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 14px; }
+  .hf-add-field { display: flex; flex-direction: column; gap: 4px; }
+  .hf-add-field label { font-size: 0.75rem; color: var(--text-muted); }
+  .hf-add-field input[type=text],
+  .hf-add-field input[type=number] {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
+    color: var(--text-primary); padding: 6px 10px; font-size: 0.85rem;
+    outline: none; transition: border-color 0.15s;
+  }
+  .hf-add-field input:focus { border-color: var(--accent); }
+  .hf-add-field input[type=text]   { width: 200px; }
+  .hf-add-field input[type=number] { width: 90px; }
+  .hf-add-field.wide input[type=text] { width: 280px; }
+  .hf-add-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+  /* ── Download Panel ── */
+  .download-panel {
+    background: var(--bg-surface); border: 1px solid var(--border);
+    border-radius: 8px; margin: 10px 24px 0; padding: 14px 18px;
+  }
+  .download-panel-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap;
+  }
+  .download-panel-header span { font-size: 0.82rem; color: var(--text-secondary); }
+  .dl-current { font-size: 0.82rem; color: var(--accent); font-weight: 500; flex: 1;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dl-progress-track {
+    background: var(--bg-elevated); border-radius: 4px; height: 6px;
+    margin-bottom: 10px; overflow: hidden;
+  }
+  .dl-progress-bar {
+    background: var(--accent); height: 100%; border-radius: 4px;
+    transition: width 0.4s ease; width: 0%;
+  }
+  .dl-log {
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
+    color: var(--text-muted); font-family: 'SF Mono', Consolas, monospace; font-size: 0.72rem;
+    height: 120px; overflow-y: auto; padding: 8px 10px; white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .dl-badge {
+    display: inline-block; border-radius: 3px; padding: 1px 6px;
+    font-size: 0.65rem; font-weight: 700; white-space: nowrap;
+  }
+  .dl-badge-dl   { background: #1a3a2a; color: var(--green); }
+  .dl-badge-skip { background: #252a38; color: var(--text-muted); }
+  .dl-badge-err  { background: #3a1a1a; color: var(--red); }
 </style>
 </head>
 <body>
+
 <header>
   <h1>AI Model Browser</h1>
-  <div class="controls">
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="my-models" onclick="switchTab(this)">Мои модели</button>
+  <button class="tab-btn" data-tab="hf-search" onclick="switchTab(this)">Поиск HuggingFace</button>
+</nav>
+
+<!-- ═══════════════════════ TAB: Мои модели ═══════════════════════ -->
+<div id="tab-my-models" class="tab-panel active">
+  <div class="controls-bar">
     <input type="text" id="search" placeholder="Поиск по модели, описанию..." oninput="applyFilters()">
     <div class="tag-filter" id="tag-filter"></div>
     <label class="toggle-label">
       <input type="checkbox" id="only-downloaded" onchange="applyFilters()">
       только скачанные
     </label>
+    <button class="btn-primary" id="save-btn" onclick="saveChanges()" disabled style="margin-left:auto">Сохранить</button>
+    <span class="status-msg" id="save-msg"></span>
+    <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" style="margin-left:8px" title="Скачать все enabled модели">Скачать enabled</button>
+    <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none">Отменить</button>
   </div>
-  <button class="save-btn" id="save-btn" onclick="saveChanges()" disabled>Сохранить</button>
-  <span class="save-msg" id="save-msg">Сохранено!</span>
-</header>
-<main>
-  <div class="stats" id="stats">Загрузка...</div>
-  <table id="models-table">
-    <thead>
-      <tr>
-        <th>Вкл</th>
-        <th>Статус</th>
-        <th>Модель / Файл</th>
-        <th>Теги</th>
-        <th>VRAM</th>
-        <th>Размер</th>
-        <th>Описание</th>
-      </tr>
-    </thead>
-    <tbody id="models-body"></tbody>
-  </table>
-  <div id="empty-msg" style="display:none">Ничего не найдено</div>
-</main>
+  <div class="download-panel" id="download-panel" style="display:none">
+    <div class="download-panel-header">
+      <span>Загрузка:</span>
+      <span class="dl-current" id="dl-current">—</span>
+      <span id="dl-counter" style="font-size:0.78rem;color:var(--text-muted)"></span>
+    </div>
+    <div class="dl-progress-track">
+      <div class="dl-progress-bar" id="dl-progress-bar"></div>
+    </div>
+    <div class="dl-log" id="dl-log"></div>
+  </div>
+  <main>
+    <div class="stats" id="stats">Загрузка...</div>
+    <table id="models-table">
+      <thead>
+        <tr>
+          <th>Вкл</th>
+          <th>Статус</th>
+          <th>Модель / Файл</th>
+          <th>Теги</th>
+          <th>VRAM</th>
+          <th>Размер</th>
+          <th>Описание</th>
+        </tr>
+      </thead>
+      <tbody id="models-body"></tbody>
+    </table>
+    <div id="empty-msg" style="display:none">Ничего не найдено</div>
+  </main>
+</div>
+
+<!-- ═══════════════════════ TAB: HuggingFace поиск ═══════════════════════ -->
+<div id="tab-hf-search" class="tab-panel">
+  <div class="hf-panel">
+
+    <div class="hf-search-form">
+      <div class="hf-field">
+        <label>Запрос</label>
+        <input type="text" id="hf-query" placeholder="llama, qwen, deepseek..." onkeydown="if(event.key==='Enter')hfSearch()">
+      </div>
+      <div class="hf-field">
+        <label>Автор</label>
+        <input type="text" id="hf-author" placeholder="bartowski, unsloth..." onkeydown="if(event.key==='Enter')hfSearch()">
+      </div>
+      <div class="hf-field">
+        <label>Regex файлов</label>
+        <input type="text" id="hf-file-regex" placeholder="Q4_K_M\.gguf$" onkeydown="if(event.key==='Enter')hfSearch()">
+      </div>
+      <div class="hf-field">
+        <label>Лимит</label>
+        <input type="number" id="hf-limit" value="20" min="1" max="50">
+      </div>
+      <button class="btn-primary" id="hf-search-btn" onclick="hfSearch()">Искать</button>
+    </div>
+
+    <div id="hf-search-status"></div>
+
+    <div id="hf-results-wrapper">
+      <div class="hf-results-controls">
+        <span id="hf-results-count"></span>
+        <button class="btn-primary" id="hf-add-btn" onclick="hfShowAddForm()" disabled>
+          Добавить выбранные
+        </button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th><input type="checkbox" class="select-cb" id="hf-select-all" onchange="hfToggleAll(this)"></th>
+            <th>Репозиторий</th>
+            <th>Файлы</th>
+            <th>Загрузки</th>
+            <th>Теги</th>
+          </tr>
+        </thead>
+        <tbody id="hf-results-body"></tbody>
+      </table>
+      <div id="hf-empty-msg">Ничего не найдено — попробуйте другие параметры поиска</div>
+
+      <div class="hf-add-form" id="hf-add-form">
+        <h3 id="hf-add-title">Добавить выбранные модели</h3>
+        <div class="hf-add-fields">
+          <div class="hf-add-field">
+            <label>dest_dir</label>
+            <input type="text" id="add-dest-dir" placeholder="misc" value="misc">
+          </div>
+          <div class="hf-add-field">
+            <label>Теги (через пробел)</label>
+            <input type="text" id="add-tags" placeholder="llm chat 8b">
+          </div>
+          <div class="hf-add-field">
+            <label>VRAM (GB)</label>
+            <input type="number" id="add-vram" placeholder="0" min="0" step="1" value="0">
+          </div>
+          <div class="hf-add-field wide">
+            <label>Описание</label>
+            <input type="text" id="add-description" placeholder="краткое описание модели">
+          </div>
+        </div>
+        <div class="hf-add-actions">
+          <label class="toggle-label">
+            <input type="checkbox" id="add-enabled"> Включить сразу (enabled: true)
+          </label>
+          <button class="btn-primary" id="add-confirm-btn" onclick="hfConfirmAdd()">Добавить в models.yaml</button>
+          <button class="btn-secondary" onclick="hfCancelAdd()">Отмена</button>
+          <span class="status-msg" id="add-status"></span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <script>
-let allModels = [];
-let changes = {};    // key: repo_id+"||"+filename → new enabled value
-let activeTags = new Set();
+// ═══════════════════════════════════════════════════════════════════
+//  Shared helpers
+// ═══════════════════════════════════════════════════════════════════
 
 function fmtSize(bytes) {
-  if (!bytes || bytes === 0) return '—';
-  const units = ['B','KB','MB','GB','TB'];
-  let v = bytes, u = 0;
-  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
-  return v.toFixed(1) + ' ' + units[u];
+  if (!bytes) return '—';
+  const u = ['B','KB','MB','GB','TB'];
+  let v = bytes, i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(1) + ' ' + u[i];
+}
+
+function fmtNum(n) {
+  if (!n) return '0';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
 }
 
 function escHtml(s) {
   return String(s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;');
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+function switchTab(btn) {
+  const name = btn.dataset.tab;
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Tab: Мои модели
+// ═══════════════════════════════════════════════════════════════════
+
+let allModels = [];
+let changes = {};
+let activeTags = new Set();
 
 function modelKey(m) { return m.repo_id + '||' + m.filename; }
 
@@ -193,31 +520,21 @@ function renderTagFilter(tags) {
 }
 
 function toggleTag(tag, btn) {
-  if (activeTags.has(tag)) {
-    activeTags.delete(tag);
-    btn.classList.remove('active');
-  } else {
-    activeTags.add(tag);
-    btn.classList.add('active');
-  }
+  if (activeTags.has(tag)) { activeTags.delete(tag); btn.classList.remove('active'); }
+  else                      { activeTags.add(tag);    btn.classList.add('active'); }
   applyFilters();
 }
 
 function applyFilters() {
   const q = document.getElementById('search').value.toLowerCase().trim();
   const onlyDl = document.getElementById('only-downloaded').checked;
-  const tbody = document.getElementById('models-body');
-  const rows = tbody.querySelectorAll('tr');
+  const rows = document.getElementById('models-body').querySelectorAll('tr');
   let visible = 0;
   rows.forEach(row => {
-    const idx = parseInt(row.dataset.idx);
-    const m = allModels[idx];
+    const m = allModels[parseInt(row.dataset.idx)];
     if (!m) return;
     let show = true;
-    if (q) {
-      const hay = (m.repo_id + ' ' + m.filename + ' ' + (m.description || '')).toLowerCase();
-      if (!hay.includes(q)) show = false;
-    }
+    if (q && !(m.repo_id + ' ' + m.filename + ' ' + (m.description || '')).toLowerCase().includes(q)) show = false;
     if (show && onlyDl && !m.downloaded) show = false;
     if (show && activeTags.size > 0) {
       const mt = new Set(m.tags || []);
@@ -226,8 +543,7 @@ function applyFilters() {
     row.style.display = show ? '' : 'none';
     if (show) visible++;
   });
-  const em = document.getElementById('empty-msg');
-  em.style.display = visible === 0 ? '' : 'none';
+  document.getElementById('empty-msg').style.display = visible === 0 ? '' : 'none';
   document.getElementById('stats').textContent =
     `Показано: ${visible} из ${allModels.length} моделей` +
     (Object.keys(changes).length > 0 ? ` · Изменений: ${Object.keys(changes).length}` : '');
@@ -235,21 +551,11 @@ function applyFilters() {
 
 function onEnabledChange(cb, m) {
   const key = modelKey(m);
-  const origEnabled = m.enabled;
   const newEnabled = cb.checked;
-  if (newEnabled === origEnabled) {
-    delete changes[key];
-  } else {
-    changes[key] = newEnabled;
-  }
-  const row = cb.closest('tr');
-  if (newEnabled) {
-    row.classList.remove('row-disabled');
-  } else {
-    row.classList.add('row-disabled');
-  }
-  const saveBtn = document.getElementById('save-btn');
-  saveBtn.disabled = Object.keys(changes).length === 0;
+  if (newEnabled === m.enabled) delete changes[key];
+  else changes[key] = newEnabled;
+  cb.closest('tr').classList.toggle('row-disabled', !newEnabled);
+  document.getElementById('save-btn').disabled = Object.keys(changes).length === 0;
   applyFilters();
 }
 
@@ -259,48 +565,39 @@ function renderModels(models) {
   models.forEach((m, i) => {
     const key = modelKey(m);
     const enabled = key in changes ? changes[key] : m.enabled;
-    const downloaded = m.downloaded;
     const tr = document.createElement('tr');
     tr.dataset.idx = i;
     if (!enabled) tr.classList.add('row-disabled');
 
-    // enabled checkbox
     const tdCb = document.createElement('td');
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.className = 'enabled-cb'; cb.checked = enabled;
     cb.onchange = () => onEnabledChange(cb, m);
     tdCb.appendChild(cb);
 
-    // status dot
     const tdStatus = document.createElement('td');
     const dot = document.createElement('span');
-    dot.className = 'status-dot ' + (downloaded ? 'dot-downloaded' : 'dot-notfound');
-    dot.title = downloaded ? 'Скачана' : 'Не скачана';
+    dot.className = 'status-dot ' + (m.downloaded ? 'dot-downloaded' : 'dot-notfound');
+    dot.title = m.downloaded ? 'Скачана' : 'Не скачана';
     tdStatus.appendChild(dot);
 
-    // repo + filename
     const tdName = document.createElement('td');
     tdName.innerHTML =
-      `<div class="cell-repo">${escHtml(m.repo_id)}${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
+      `<div class="cell-repo"><a href="https://huggingface.co/${escHtml(m.repo_id)}" target="_blank">${escHtml(m.repo_id)}</a>${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
       `<div class="cell-filename">${escHtml(m.filename)}</div>`;
 
-    // tags
     const tdTags = document.createElement('td');
     tdTags.innerHTML = '<div class="tags-cell">' +
-      (m.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') +
-      '</div>';
+      (m.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') + '</div>';
 
-    // vram
     const tdVram = document.createElement('td');
     tdVram.className = 'vram';
     tdVram.textContent = m.vram_gb ? m.vram_gb + ' GB' : '—';
 
-    // size
     const tdSize = document.createElement('td');
-    tdSize.className = 'cell-size ' + (downloaded ? 'downloaded' : 'notfound');
-    tdSize.textContent = downloaded ? fmtSize(m.disk_size_bytes) : '—';
+    tdSize.className = 'cell-size ' + (m.downloaded ? 'downloaded' : 'notfound');
+    tdSize.textContent = m.downloaded ? fmtSize(m.disk_size_bytes) : '—';
 
-    // description
     const tdDesc = document.createElement('td');
     tdDesc.className = 'desc';
     tdDesc.textContent = m.description || '';
@@ -315,8 +612,7 @@ async function loadModels() {
     const resp = await fetch('/api/models');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     allModels = await resp.json();
-    const tags = collectTags(allModels);
-    renderTagFilter(tags);
+    renderTagFilter(collectTags(allModels));
     renderModels(allModels);
     applyFilters();
   } catch (e) {
@@ -328,41 +624,367 @@ async function saveChanges() {
   const btn = document.getElementById('save-btn');
   const msg = document.getElementById('save-msg');
   btn.disabled = true;
-  msg.style.display = 'none';
+  msg.className = 'status-msg'; msg.style.display = 'none';
   const updates = Object.entries(changes).map(([key, enabled]) => {
     const [repo_id, filename] = key.split('||');
     return { repo_id, filename, enabled };
   });
   try {
     const resp = await fetch('/api/save', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ updates }),
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ error: 'HTTP ' + resp.status }));
       throw new Error(err.error || 'HTTP ' + resp.status);
     }
-    // Apply changes to allModels in-place
     for (const [key, enabled] of Object.entries(changes)) {
       const [repo_id, filename] = key.split('||');
       const m = allModels.find(x => x.repo_id === repo_id && x.filename === filename);
       if (m) m.enabled = enabled;
     }
     changes = {};
-    msg.textContent = 'Сохранено!';
-    msg.style.color = '#68d391';
-    msg.style.display = '';
+    msg.className = 'status-msg ok'; msg.textContent = 'Сохранено!'; msg.style.display = '';
     setTimeout(() => { msg.style.display = 'none'; }, 3000);
     applyFilters();
   } catch (e) {
-    msg.textContent = 'Ошибка: ' + e.message;
-    msg.style.color = '#fc8181';
-    msg.style.display = '';
+    msg.className = 'status-msg err'; msg.textContent = 'Ошибка: ' + e.message; msg.style.display = '';
     btn.disabled = Object.keys(changes).length === 0;
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  Tab: Поиск HuggingFace
+// ═══════════════════════════════════════════════════════════════════
+
+let hfResults = [];
+let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags}
+
+async function hfSearch() {
+  const q         = document.getElementById('hf-query').value.trim();
+  const author    = document.getElementById('hf-author').value.trim();
+  const fileRegex = document.getElementById('hf-file-regex').value.trim();
+  const limit     = Math.min(50, Math.max(1, parseInt(document.getElementById('hf-limit').value) || 20));
+
+  if (!q && !author && !fileRegex) {
+    setHfStatus('Укажите хотя бы один параметр поиска', true);
+    return;
+  }
+
+  const btn = document.getElementById('hf-search-btn');
+  btn.disabled = true;
+  hfSelected.clear();
+  document.getElementById('hf-add-btn').disabled = true;
+  document.getElementById('hf-add-form').style.display = 'none';
+  document.getElementById('hf-results-wrapper').style.display = 'none';
+
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (author) params.set('author', author);
+  if (fileRegex) params.set('file_regex', fileRegex);
+  params.set('limit', limit);
+
+  setHfStatus('<span class="spinner"></span>&nbsp;Поиск на HuggingFace...', false);
+
+  try {
+    const resp = await fetch('/api/search?' + params.toString());
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'HTTP ' + resp.status);
+    hfResults = data.results || [];
+    renderHfResults(hfResults);
+    const note = hfResults.length !== data.count
+      ? ` (показано ${hfResults.length} из ${data.count})`
+      : ` (${data.count})`;
+    setHfStatus('Найдено репозиториев: ' + data.count + (data.count !== hfResults.length ? `, строк: ${hfResults.reduce((s,r)=>s+(r.files.length||1),0)}` : ''), false);
+  } catch (e) {
+    setHfStatus('Ошибка: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setHfStatus(html, isErr) {
+  const el = document.getElementById('hf-search-status');
+  el.innerHTML = html;
+  el.className = isErr ? 'err' : '';
+}
+
+function renderHfResults(results) {
+  const tbody = document.getElementById('hf-results-body');
+  tbody.innerHTML = '';
+  document.getElementById('hf-select-all').checked = false;
+  document.getElementById('hf-select-all').indeterminate = false;
+  document.getElementById('hf-empty-msg').style.display = results.length === 0 ? '' : 'none';
+  document.getElementById('hf-results-wrapper').style.display = 'block';
+  document.getElementById('hf-results-count').textContent = '';
+
+  results.forEach(r => {
+    const files = r.files && r.files.length > 0 ? r.files : [null];
+    files.forEach((fname, fi) => {
+      const key = r.repo_id + '||' + (fname || '');
+      const tr = document.createElement('tr');
+      tr.dataset.key = key;
+
+      // checkbox
+      const tdCb = document.createElement('td');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
+      cb.onchange = () => hfSelectionChange(cb, r, fname);
+      tdCb.appendChild(cb);
+      tr.appendChild(tdCb);
+
+      // repo — только на первой строке файлов репозитория
+      if (fi === 0) {
+        const tdRepo = document.createElement('td');
+        tdRepo.className = 'cell-hf-repo';
+        if (files.length > 1) tdRepo.rowSpan = files.length;
+        tdRepo.innerHTML =
+          `<a href="https://huggingface.co/${escHtml(r.repo_id)}" target="_blank">${escHtml(r.repo_id)}</a>` +
+          (r.gated ? '<span class="gated-badge">GATED</span>' : '');
+        tr.appendChild(tdRepo);
+      }
+
+      // filename
+      const tdFile = document.createElement('td');
+      tdFile.className = 'cell-hf-files';
+      if (fname) {
+        tdFile.innerHTML = `<span class="file-item">${escHtml(fname)}</span>`;
+      } else {
+        tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов (укажите regex)</span>`;
+      }
+      tr.appendChild(tdFile);
+
+      // downloads — только на первой строке
+      if (fi === 0) {
+        const tdDl = document.createElement('td');
+        tdDl.className = 'downloads';
+        if (files.length > 1) tdDl.rowSpan = files.length;
+        tdDl.textContent = fmtNum(r.downloads);
+        tr.appendChild(tdDl);
+
+        const tdTags = document.createElement('td');
+        if (files.length > 1) tdTags.rowSpan = files.length;
+        tdTags.innerHTML = '<div class="tags-cell">' +
+          (r.tags || []).slice(0, 6).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') +
+          '</div>';
+        tr.appendChild(tdTags);
+      }
+
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+function hfSelectionChange(cb, r, fname) {
+  const key = r.repo_id + '||' + (fname || '');
+  if (cb.checked) {
+    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [] });
+  } else {
+    hfSelected.delete(key);
+  }
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+  const allCbs = document.querySelectorAll('#hf-results-body .select-cb');
+  const checked = document.querySelectorAll('#hf-results-body .select-cb:checked').length;
+  document.getElementById('hf-select-all').checked = allCbs.length > 0 && checked === allCbs.length;
+  document.getElementById('hf-select-all').indeterminate = checked > 0 && checked < allCbs.length;
+}
+
+function hfToggleAll(masterCb) {
+  document.querySelectorAll('#hf-results-body .select-cb').forEach(cb => {
+    cb.checked = masterCb.checked;
+    const key = cb.dataset.key;
+    const [repo_id, fname] = key.split('||');
+    const r = hfResults.find(x => x.repo_id === repo_id);
+    if (!r) return;
+    if (masterCb.checked) {
+      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [] });
+    } else {
+      hfSelected.delete(key);
+    }
+  });
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+}
+
+function hfShowAddForm() {
+  const n = hfSelected.size;
+  const word = n === 1 ? 'модель' : n < 5 ? 'модели' : 'моделей';
+  document.getElementById('hf-add-title').textContent = `Добавить ${n} ${word} в models.yaml`;
+  document.getElementById('hf-add-form').style.display = 'block';
+  document.getElementById('add-status').className = 'status-msg';
+  document.getElementById('add-status').style.display = 'none';
+  document.getElementById('hf-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function hfCancelAdd() {
+  document.getElementById('hf-add-form').style.display = 'none';
+}
+
+async function hfConfirmAdd() {
+  const dest_dir   = document.getElementById('add-dest-dir').value.trim() || 'misc';
+  const tagsRaw    = document.getElementById('add-tags').value.trim();
+  const tags       = tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [];
+  const vram_gb    = parseFloat(document.getElementById('add-vram').value) || 0;
+  const description = document.getElementById('add-description').value.trim();
+  const enabled    = document.getElementById('add-enabled').checked;
+
+  const models = [];
+  for (const [, item] of hfSelected.entries()) {
+    if (!item.filename) {
+      setAddStatus('Ошибка: у некоторых записей нет имени файла — используйте «Regex файлов» при поиске', true);
+      return;
+    }
+    models.push({
+      repo_id: item.repo_id, filename: item.filename,
+      dest_dir, enabled, gated: item.gated,
+      tags: tags.length > 0 ? tags : item.tags,
+      vram_gb, description,
+    });
+  }
+
+  const btn = document.getElementById('add-confirm-btn');
+  btn.disabled = true;
+  setAddStatus('<span class="spinner"></span>&nbsp;Сохранение...', false);
+
+  try {
+    const resp = await fetch('/api/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'HTTP ' + resp.status);
+    const skippedNote = data.skipped && data.skipped.length > 0
+      ? ` · Пропущено дубликатов: ${data.skipped.length}` : '';
+    setAddStatus(`Добавлено: ${data.added}${skippedNote}`, false);
+    hfSelected.clear();
+    document.getElementById('hf-add-btn').disabled = true;
+    document.querySelectorAll('#hf-results-body .select-cb').forEach(cb => cb.checked = false);
+    document.getElementById('hf-select-all').checked = false;
+    document.getElementById('hf-select-all').indeterminate = false;
+    loadModels(); // обновляем список моделей в фоне
+  } catch (e) {
+    setAddStatus('Ошибка: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function setAddStatus(html, isErr) {
+  const el = document.getElementById('add-status');
+  el.innerHTML = html;
+  el.className = 'status-msg' + (isErr ? ' err' : ' ok');
+  el.style.display = html ? '' : 'none';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Download — SSE client
+// ═══════════════════════════════════════════════════════════════════
+
+let _dlEventSource = null;
+let _dlLogLines = [];
+
+async function dlStart() {
+  const startBtn  = document.getElementById('dl-start-btn');
+  const cancelBtn = document.getElementById('dl-cancel-btn');
+  const panel     = document.getElementById('download-panel');
+
+  startBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/download/start');
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Ошибка запуска загрузки: ' + (data.error || 'HTTP ' + resp.status));
+      startBtn.disabled = false;
+      return;
+    }
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+    startBtn.disabled = false;
+    return;
+  }
+
+  // Show UI
+  startBtn.style.display = 'none';
+  cancelBtn.style.display = '';
+  cancelBtn.disabled = false;
+  panel.style.display = '';
+  _dlLogLines = [];
+  document.getElementById('dl-log').textContent = '';
+  document.getElementById('dl-current').textContent = '—';
+  document.getElementById('dl-progress-bar').style.width = '0%';
+  document.getElementById('dl-counter').textContent = '';
+
+  // Open SSE stream
+  if (_dlEventSource) { _dlEventSource.close(); }
+  _dlEventSource = new EventSource('/api/download/stream');
+
+  _dlEventSource.onmessage = function(e) {
+    let d;
+    try { d = JSON.parse(e.data); } catch(_) { return; }
+
+    // Update current model
+    if (d.current) {
+      document.getElementById('dl-current').textContent = d.current;
+    }
+
+    // Update progress bar
+    document.getElementById('dl-progress-bar').style.width = (d.progress || 0) + '%';
+
+    // Update counter
+    if (d.model_count > 0) {
+      document.getElementById('dl-counter').textContent =
+        d.done_count + ' / ' + d.model_count;
+    }
+
+    // Append new log lines
+    if (d.log && d.log.length > 0) {
+      const logEl = document.getElementById('dl-log');
+      const allNew = d.log.slice(_dlLogLines.length);
+      if (allNew.length > 0) {
+        _dlLogLines = d.log.slice();
+        logEl.textContent += allNew.join('\n') + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+
+    // Done?
+    if (!d.running) {
+      dlDone();
+    }
+  };
+
+  _dlEventSource.onerror = function() {
+    dlDone();
+  };
+}
+
+function dlDone() {
+  if (_dlEventSource) { _dlEventSource.close(); _dlEventSource = null; }
+  const startBtn  = document.getElementById('dl-start-btn');
+  const cancelBtn = document.getElementById('dl-cancel-btn');
+  const panel     = document.getElementById('download-panel');
+
+  document.getElementById('dl-progress-bar').style.width = '100%';
+  document.getElementById('dl-current').textContent = 'Завершено';
+  cancelBtn.style.display = 'none';
+  startBtn.style.display  = '';
+  startBtn.disabled = false;
+
+  // Refresh model status dots after download
+  loadModels();
+
+  // Auto-hide panel after 8 seconds
+  setTimeout(() => { panel.style.display = 'none'; }, 8000);
+}
+
+async function dlCancel() {
+  const cancelBtn = document.getElementById('dl-cancel-btn');
+  cancelBtn.disabled = true;
+  try {
+    await fetch('/api/download/cancel', { method: 'POST' });
+  } catch (_) {}
+}
+
+// Init
 loadModels();
 </script>
 </body>
@@ -391,7 +1013,6 @@ def get_models_json(config_path: Path) -> list[dict]:
     settings: dict = raw.get("settings", {})
     models_dir = Path(settings.get("models_dir", "./models"))
 
-    # Resolve models_dir relative to config_path location
     if not models_dir.is_absolute():
         models_dir = config_path.parent / models_dir
 
@@ -431,8 +1052,7 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
     Atomically update 'enabled' field in models.yaml for given models.
 
     Updates is a list of {repo_id, filename, enabled} dicts.
-    Uses tempfile + os.replace() for POSIX atomic write (R1 mitigation).
-    Comments in models.yaml will be lost (acceptable per task requirements).
+    Uses tempfile + os.replace() for POSIX atomic write.
     """
     raw = load_yaml(config_path)
     update_map = {
@@ -440,23 +1060,169 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
         for u in updates
     }
 
-    models_list = raw.get("models", []) or []
-    for item in models_list:
+    for item in raw.get("models", []) or []:
         if not isinstance(item, dict):
             continue
         key = (item.get("repo_id", ""), item.get("filename", ""))
         if key in update_map:
             item["enabled"] = update_map[key]
 
-    # Atomic write: write to temp in same dir, then rename (R1 mitigation)
+    _atomic_yaml_write(config_path, raw)
+
+
+# ─── HuggingFace Search ────────────────────────────────────────────────────────
+
+
+def search_hf(
+    query: Optional[str],
+    author: Optional[str],
+    file_regex: Optional[str],
+    limit: int,
+    token: Optional[str],
+) -> list[dict]:
+    """
+    Поиск моделей на HuggingFace Hub.
+
+    Использует m.siblings для фильтрации файлов без лишних API-запросов.
+    Возвращает список dict с полями: repo_id, downloads, likes, gated,
+    pipeline_tag, tags, files.
+    """
+    from huggingface_hub import HfApi
+
+    limit = min(50, max(1, limit))
+    api = HfApi(token=token)
+
+    # Запрашиваем с запасом если есть regex (он отсеет часть)
+    fetch_limit = limit * 4 if file_regex else limit
+
+    kwargs: dict[str, Any] = {
+        "limit": fetch_limit,
+        "sort": "downloads",
+        "direction": -1,
+    }
+    if query:
+        kwargs["search"] = query
+    if author:
+        kwargs["author"] = author
+
+    models = list(api.list_models(**kwargs))
+
+    compiled_re: Optional[re.Pattern] = None
+    if file_regex:
+        compiled_re = re.compile(file_regex, re.IGNORECASE)
+
+    results = []
+    for m in models:
+        # Фильтрация файлов через siblings (не требует отдельного запроса)
+        if compiled_re is not None:
+            siblings = m.siblings or []
+            matched_files = sorted(
+                s.rfilename for s in siblings
+                if compiled_re.search(s.rfilename)
+            )
+            if not matched_files:
+                continue  # пропускаем репо без совпадений
+            files = matched_files
+        else:
+            files = []
+
+        tags_raw = m.tags or []
+        tags = [t for t in tags_raw if ":" not in t][:8]
+
+        results.append({
+            "repo_id": m.id,
+            "downloads": getattr(m, "downloads", 0) or 0,
+            "likes": getattr(m, "likes", 0) or 0,
+            "gated": bool(getattr(m, "gated", False)),
+            "pipeline_tag": getattr(m, "pipeline_tag", "") or "",
+            "tags": tags,
+            "files": files,
+        })
+
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+# ─── Add models to YAML ────────────────────────────────────────────────────────
+
+
+def add_models_to_yaml(
+    config_path: Path,
+    new_models: list[dict],
+) -> dict:
+    """
+    Атомарно добавляет новые записи в models.yaml.
+
+    Пропускает дубликаты по паре (repo_id, filename).
+    Возвращает {"added": int, "skipped": list[str]}.
+    """
+    raw = load_yaml(config_path)
+    existing_keys: set[tuple[str, str]] = {
+        (m.get("repo_id", ""), m.get("filename", ""))
+        for m in (raw.get("models", []) or [])
+        if isinstance(m, dict)
+    }
+
+    added = 0
+    skipped: list[str] = []
+
+    for item in new_models:
+        repo_id = str(item.get("repo_id", "")).strip()
+        filename = str(item.get("filename", "")).strip()
+        if not repo_id or not filename:
+            continue
+
+        key = (repo_id, filename)
+        if key in existing_keys:
+            skipped.append(f"{repo_id}::{filename}")
+            continue
+
+        # Безопасное приведение типов
+        try:
+            vram = float(item.get("vram_gb", 0) or 0)
+        except (ValueError, TypeError):
+            vram = 0.0
+
+        raw_tags = item.get("tags", []) or []
+        if isinstance(raw_tags, list):
+            tags = [str(t) for t in raw_tags if t]
+        else:
+            tags = []
+
+        entry: dict[str, Any] = {
+            "repo_id": repo_id,
+            "filename": filename,
+            "dest_dir": str(item.get("dest_dir", "misc") or "misc"),
+            "enabled": bool(item.get("enabled", False)),
+            "gated": bool(item.get("gated", False)),
+            "tags": tags,
+            "vram_gb": vram,
+            "description": str(item.get("description", "") or ""),
+        }
+
+        if "models" not in raw or raw["models"] is None:
+            raw["models"] = []
+        raw["models"].append(entry)
+        existing_keys.add(key)
+        added += 1
+
+    if added > 0:
+        _atomic_yaml_write(config_path, raw)
+
+    return {"added": added, "skipped": skipped}
+
+
+def _atomic_yaml_write(config_path: Path, data: dict) -> None:
+    """Атомарная запись YAML через tempfile + os.replace()."""
     config_dir = config_path.parent
     fd, tmp_path = tempfile.mkstemp(dir=str(config_dir), suffix=".yaml.tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            yaml.dump(raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+            yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
         os.replace(tmp_path, str(config_path))
     except Exception:
-        # Clean up temp file on failure
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -470,10 +1236,10 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
 class ModelBrowserHandler(BaseHTTPRequestHandler):
     """HTTP request handler for AI Model Browser."""
 
-    config_path: Path  # set by server factory
+    config_path: Path       # set by make_handler()
+    hf_token: Optional[str] # set by make_handler()
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002
-        """Suppress default access log; print minimal info."""
         print(f"  {self.address_string()} {format % args}")
 
     def _send_json(self, data: Any, status: int = 200) -> None:
@@ -493,27 +1259,125 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_sse_headers(self) -> None:
+        """Send SSE (Server-Sent Events) response headers, then keep connection open."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802
-        if self.path == "/" or self.path == "/index.html":
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path in ("/", "/index.html"):
             self._send_html(HTML_PAGE)
-        elif self.path == "/api/models":
+
+        elif path == "/api/models":
             try:
                 models = get_models_json(self.config_path)
                 self._send_json(models)
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/search":
+            qs = parse_qs(parsed.query)
+            query      = qs.get("q", [None])[0] or None
+            author     = qs.get("author", [None])[0] or None
+            file_regex = qs.get("file_regex", [None])[0] or None
+            try:
+                limit = int(qs.get("limit", ["20"])[0])
+            except (ValueError, TypeError):
+                limit = 20
+
+            try:
+                results = search_hf(query, author, file_regex, limit, self.hf_token)
+                self._send_json({"results": results, "count": len(results)})
+            except Exception as e:
+                self._send_json({"error": str(e), "results": []}, status=500)
+
+        elif path == "/api/download/start":
+            with _dl_lock:
+                if download_state["running"]:
+                    self._send_json({"error": "Download already running"}, status=409)
+                    return
+                # Count enabled models
+                try:
+                    models_list = get_models_json(self.config_path)
+                    enabled_count = sum(1 for m in models_list if m.get("enabled", True))
+                except Exception:
+                    enabled_count = 0
+                # Reset state
+                download_state["running"] = True
+                download_state["cancelled"] = False
+                download_state["process"] = None
+                download_state["log"] = []
+                download_state["current"] = ""
+                download_state["progress"] = 0
+                download_state["model_count"] = enabled_count
+                download_state["done_count"] = 0
+                download_state["status_map"] = {}
+            # Start background download thread
+            t = threading.Thread(
+                target=_download_worker,
+                args=(self.config_path,),
+                daemon=True,
+            )
+            t.start()
+            self._send_json({"status": "started", "model_count": enabled_count})
+
+        elif path == "/api/download/stream":
+            self._send_sse_headers()
+            try:
+                while True:
+                    with _dl_lock:
+                        snapshot = {
+                            "running": download_state["running"],
+                            "cancelled": download_state["cancelled"],
+                            "current": download_state["current"],
+                            "progress": download_state["progress"],
+                            "model_count": download_state["model_count"],
+                            "done_count": download_state["done_count"],
+                            "log": list(download_state["log"][-30:]),
+                            "status_map": dict(download_state["status_map"]),
+                        }
+                    payload = json.dumps(snapshot, ensure_ascii=False)
+                    self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
+                    self.wfile.flush()
+                    if not snapshot["running"]:
+                        break
+                    time.sleep(0.5)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Client disconnected
+
         else:
             self._send_json({"error": "Not found"}, status=404)
 
     def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+
+        if self.path == "/api/download/cancel":
+            with _dl_lock:
+                download_state["cancelled"] = True
+                proc = download_state.get("process")
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            self._send_json({"status": "cancelled"})
+            return
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError as e:
+            self._send_json({"error": f"Invalid JSON: {e}"}, status=400)
+            return
+
         if self.path == "/api/save":
-            length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(length)
-            try:
-                payload = json.loads(body)
-            except json.JSONDecodeError as e:
-                self._send_json({"error": f"Invalid JSON: {e}"}, status=400)
-                return
             try:
                 updates = payload.get("updates", [])
                 if not isinstance(updates, list):
@@ -521,25 +1385,125 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 save_models(self.config_path, updates)
                 self._send_json({"status": "ok", "updated": len(updates)})
             except (ValueError, TypeError) as e:
-                # Ошибки валидации входных данных → 400 Bad Request
                 self._send_json({"error": str(e)}, status=400)
             except Exception as e:
-                # Ошибки файловой системы, YAML и прочие → 500 Internal Server Error
                 self._send_json({"error": str(e)}, status=500)
+
+        elif self.path == "/api/add":
+            try:
+                models_list = payload.get("models", [])
+                if not isinstance(models_list, list):
+                    raise ValueError("'models' must be a list")
+                result = add_models_to_yaml(self.config_path, models_list)
+                self._send_json({"status": "ok", **result})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
         else:
             self._send_json({"error": "Not found"}, status=404)
+
+
+# ─── Download Worker ──────────────────────────────────────────────────────────
+
+
+def _download_worker(config_path: Path) -> None:
+    """
+    Background thread that runs download_models.py as a subprocess.
+
+    Streams stdout lines into download_state['log'] and parses progress
+    markers of the form:
+      [repo_id] — начало модели
+      [OK]  / [SKIP] / [ERR] — результат
+    Updates download_state fields under _dl_lock.
+    """
+    script = Path(__file__).parent / "download_models.py"
+    cmd = [
+        sys.executable, str(script),
+        "--config", str(config_path),
+    ]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,   # merge stderr → stdout for single stream
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+        )
+        with _dl_lock:
+            download_state["process"] = proc
+
+        done_count = 0
+        model_count = download_state["model_count"] or 1  # avoid div-by-zero
+
+        for raw_line in proc.stdout:  # type: ignore[union-attr]
+            line = raw_line.rstrip()
+            if not line:
+                continue
+
+            # Strip tqdm carriage-return lines (progress bar artifacts)
+            if "\r" in line:
+                # Keep only the last segment after the last \r
+                line = line.rsplit("\r", 1)[-1].strip()
+            if not line:
+                continue
+
+            with _dl_lock:
+                if download_state["cancelled"]:
+                    break
+
+                download_state["log"].append(line)
+                # Keep log bounded
+                if len(download_state["log"]) > 500:
+                    download_state["log"] = download_state["log"][-400:]
+
+                # Parse model start: lines like "[ModelName]" from download_models.py
+                if line.startswith("[") and line.endswith("]") and not line.startswith("[INFO]") \
+                        and not line.startswith("[WARN]") and not line.startswith("[ERR") \
+                        and not line.startswith("[DOWNLOAD") and not line.startswith("[SKIP") \
+                        and not line.startswith("[OK"):
+                    download_state["current"] = line[1:-1]
+
+                # Parse result lines
+                for marker, status_key in (("[OK]", "DOWNLOAD"), ("[SKIP]", "SKIP"), ("[ERR]", "ERROR")):
+                    if f"  {marker}" in line or line.startswith(marker):
+                        cur = download_state["current"]
+                        if cur:
+                            download_state["status_map"][cur] = status_key
+                        done_count += 1
+                        download_state["done_count"] = done_count
+                        pct = int(done_count * 100 / model_count)
+                        download_state["progress"] = min(pct, 99)
+                        break
+
+        proc.wait()
+        with _dl_lock:
+            download_state["running"] = False
+            download_state["progress"] = 100
+            download_state["process"] = None
+
+    except Exception as exc:
+        with _dl_lock:
+            download_state["log"].append(f"[WORKER ERROR] {exc}")
+            download_state["running"] = False
+            download_state["process"] = None
 
 
 # ─── Server Factory ────────────────────────────────────────────────────────────
 
 
-def make_handler(config_path: Path) -> type[ModelBrowserHandler]:
-    """Create a handler class with config_path bound."""
+def make_handler(config_path: Path, hf_token: Optional[str] = None) -> type[ModelBrowserHandler]:
+    """Create a handler class with config_path and hf_token bound."""
 
     class Handler(ModelBrowserHandler):
         pass
 
     Handler.config_path = config_path
+    Handler.hf_token = hf_token
     return Handler
 
 
@@ -554,22 +1518,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--port", "-p",
-        type=int,
-        default=9000,
-        metavar="PORT",
+        type=int, default=9000, metavar="PORT",
         help="Порт HTTP-сервера (по умолчанию: 9000)",
     )
     p.add_argument(
         "--host",
-        default="127.0.0.1",
-        metavar="HOST",
-        help="Адрес для привязки (по умолчанию: 127.0.0.1; используйте 0.0.0.0 для сетевого доступа)",
+        default="127.0.0.1", metavar="HOST",
+        help="Адрес для привязки (по умолчанию: 127.0.0.1)",
     )
     p.add_argument(
         "--config",
-        default="models.yaml",
-        metavar="FILE",
+        default="models.yaml", metavar="FILE",
         help="Путь к models.yaml (по умолчанию: models.yaml)",
+    )
+    p.add_argument(
+        "--creds",
+        default="credentials.yaml", metavar="FILE",
+        help="Файл с HF-токеном (по умолчанию: credentials.yaml)",
+    )
+    p.add_argument(
+        "--open", "-o",
+        action="store_true",
+        help="Открыть браузер автоматически после запуска сервера",
     )
     return p
 
@@ -583,28 +1553,35 @@ def main() -> int:
 
     if not config_path.is_file():
         print(f"[ERROR] Config not found: {config_path}", file=sys.stderr)
-        print(
-            "  Run from the project root directory or use --config to specify path.",
-            file=sys.stderr,
-        )
+        print("  Run from the project root or use --config to specify path.", file=sys.stderr)
         return 1
 
-    # Validate YAML is parseable before starting server
     try:
         load_yaml(config_path)
     except Exception as e:
         print(f"[ERROR] Cannot parse {config_path}: {e}", file=sys.stderr)
         return 1
 
-    handler_class = make_handler(config_path)
-    server = HTTPServer((args.host, args.port), handler_class)
+    # Загрузка HF-токена (credentials.yaml → HF_TOKEN env)
+    creds_path = Path(args.creds)
+    hf_token = load_hf_token(creds_path)
+    if hf_token:
+        print("[INFO] HuggingFace token loaded (HF search enabled)")
+    else:
+        print("[INFO] No HF token — public search only (set HF_TOKEN or credentials.yaml)")
+
+    handler_class = make_handler(config_path, hf_token)
+    server = ThreadedHTTPServer((args.host, args.port), handler_class)
 
     url = f"http://localhost:{args.port}"
     print(f"[INFO] AI Model Browser")
-    print(f"[INFO] Config: {config_path.resolve()}")
-    print(f"[INFO] Listening on {args.host}:{args.port}")
-    print(f"[INFO] Open in browser: {url}")
+    print(f"[INFO] Config : {config_path.resolve()}")
+    print(f"[INFO] Listen : {args.host}:{args.port}")
+    print(f"[INFO] URL    : {url}")
     print("[INFO] Press Ctrl+C to stop.")
+
+    if args.open:
+        threading.Timer(0.6, lambda: webbrowser.open(url)).start()
 
     try:
         server.serve_forever()
