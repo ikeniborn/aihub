@@ -8,18 +8,6 @@ settings:
   s3:
     sync_after_download: false
 models:
-- repo_id: bartowski/Meta-Llama-3.1-8B-Instruct-GGUF
-  filename: Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf
-  dest_dir: llm/llama
-  enabled: false
-  gated: false
-  tags:
-  - llm
-  - chat
-  - english
-  - 8b
-  vram_gb: 5
-  description: Llama 3.1 8B Instruct Q4_K_M — Meta, Llama Community License
 - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
   filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
   dest_dir: llm/qwen
@@ -191,9 +179,18 @@ models:
 - repo_id: mradermacher/nomic-embed-code-i1-GGUF
   filename: nomic-embed-code.i1-Q4_K_M.gguf
   dest_dir: embeddings
-  enabled: true
+  enabled: false
   gated: false
   tags:
   - embeddings
   vram_gb: 0.0
   description: nomic-embed-code v1 GGUF i1-Q4_K_M — code embedding model (Nomic AI)
+- repo_id: unsloth/Qwen3-Coder-Next-GGUF
+  filename: Qwen3-Coder-Next-Q4_K_M.gguf
+  dest_dir: misc
+  enabled: true
+  gated: false
+  tags:
+  - apache-2.0
+  vram_gb: 0.0
+  description: Qwen3-Coder-Next [apache-2.0]
