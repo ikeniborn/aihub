@@ -10,8 +10,16 @@ type: module
 
 description: >
   Shared helper functions imported by all three CLI scripts via sys.path insertion.
-  Acts as the single source of truth for credential loading and size formatting.
-  Has no internal dependencies and only depends on PyYAML externally.
+  Acts as the single source of truth for credential loading, proxy configuration,
+  and size formatting. Has no internal dependencies and only depends on PyYAML externally.
+
+data_classes:
+  ProxyConfig:
+    fields: [enabled (bool), url (str)]
+    property: "valid (bool — enabled=True and url non-empty)"
+    methods:
+      - "apply_to_env() — sets HTTP_PROXY/HTTPS_PROXY/http_proxy/https_proxy in os.environ"
+      - "boto3_proxies() -> Optional[dict] — returns {'http': url, 'https': url} or None"
 
 public_api:
   - signature: "fmt_size(n: Union[int, float]) -> str"
@@ -27,6 +35,14 @@ public_api:
       credentials.yaml takes priority over the environment.
       Returns None if no token is found in either location.
 
+  - signature: "load_proxy_config(creds_path: Optional[Path]) -> ProxyConfig"
+    description: >
+      Loads proxy settings from environment variables (PROXY_ENABLED, PROXY_URL)
+      with fallback to the proxy: section of credentials.yaml.
+      Environment variables take priority. Supported schemes: http://, https://,
+      socks5://, socks5h:// (SOCKS5 requires requests[socks]).
+      Returns ProxyConfig(enabled=False) if proxy is not configured.
+
 dependencies:
   internal: []
   external:
@@ -35,7 +51,10 @@ dependencies:
       usage: yaml.safe_load() for parsing credentials.yaml
     - name: os
       stdlib: true
-      usage: os.environ.get() for HF_TOKEN fallback
+      usage: os.environ.get() for token/proxy fallback; os.environ.setdefault() for apply_to_env()
+    - name: dataclasses
+      stdlib: true
+      usage: "@dataclass decorator for ProxyConfig"
     - name: pathlib.Path
       stdlib: true
       usage: type hint and is_file() check
@@ -48,3 +67,4 @@ consumers:
 notes:
   - "All three scripts insert scripts/ into sys.path before importing utils"
   - "fmt_size is also reimplemented in JavaScript inside model_browser.py HTML (fmtSize)"
+  - "apply_to_env() uses setdefault so it never overrides proxy vars already set in the shell"

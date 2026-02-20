@@ -37,12 +37,20 @@ huggingface:
 s3:
   access_key_id: "..."
   secret_access_key: "..."
+proxy:                     # опционально; .env имеет приоритет
+  enabled: false
+  url: ""
 ```
 
 ### Параметры → `.env` (gitignored)
 
 ```bash
 HF_HUB_ENABLE_HF_TRANSFER=1   # ускоренные загрузки
+
+# Proxy (необязательно — для корпоративных сетей и фаерволов)
+PROXY_ENABLED=true
+PROXY_URL=http://proxy.example.com:8080
+
 S3_BUCKET=my-bucket
 S3_REGION=us-east-1
 S3_PREFIX=models

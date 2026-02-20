@@ -15,6 +15,10 @@ description: >
   users find models to add to models.yaml.
 
 key_behaviors:
+  proxy:
+    - Calls load_proxy_config() immediately after load_dotenv() in main()
+    - Calls proxy_cfg.apply_to_env() so HfApi requests route through the proxy
+    - Logs "[INFO] Proxy enabled: <url>" only when proxy is active
   search:
     - Full-text search via HuggingFace Hub API (search parameter)
     - Author/organization filter (exact match via author parameter)
@@ -32,7 +36,7 @@ key_behaviors:
 
 dependencies:
   internal:
-    - utils (load_hf_token)
+    - utils (load_hf_token, load_proxy_config)
     - credentials-config (credentials.yaml)
   external:
     - name: huggingface_hub
@@ -41,6 +45,9 @@ dependencies:
       usage: "yaml.dump() for YAML snippet output"
     - name: python-dotenv
       usage: "load_dotenv('.env') at startup"
+    - name: requests[socks]
+      optional: false
+      usage: "PySocks dependency enabling socks5:// and socks5h:// proxy schemes"
 
 cli_interface:
   program: browse_models.py

@@ -11,3 +11,6 @@ hf_transfer>=0.1.4
 # S3 / object storage support (AWS S3, MinIO, Yandex, Cloudflare R2, etc.)
 # Required only when using --upload-s3 or --s3-only flags
 boto3>=1.26.0
+
+# SOCKS5 proxy support (socks5:// and socks5h:// in PROXY_URL)
+requests[socks]>=2.31.0

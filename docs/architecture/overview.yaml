@@ -30,12 +30,15 @@ components:
     type: module
     description: >
       Shared helper functions used by all scripts. Provides fmt_size() for
-      human-readable byte formatting and load_hf_token() for loading the
-      HuggingFace authentication token from credentials.yaml or the HF_TOKEN
-      environment variable. Single source of truth for credential loading.
+      human-readable byte formatting, load_hf_token() for HuggingFace token
+      loading, and load_proxy_config() + ProxyConfig for centralised HTTP/SOCKS
+      proxy configuration. Single source of truth for credential and proxy loading.
     public_api:
       - fmt_size(n) -> str
       - load_hf_token(creds_path) -> Optional[str]
+      - load_proxy_config(creds_path) -> ProxyConfig
+      - ProxyConfig.apply_to_env()
+      - ProxyConfig.boto3_proxies() -> Optional[dict]
     dependencies: []
     external_deps:
       - PyYAML
@@ -193,16 +196,21 @@ components:
     type: config
     description: >
       Split secret/config pattern. credentials.yaml (gitignored) stores
-      sensitive secrets: HuggingFace token and S3 access_key_id/secret_access_key.
-      .env (gitignored) stores non-secret parameters: S3 bucket, region, prefix,
-      endpoint_url, and HF_HUB_ENABLE_HF_TRANSFER flag. Priority chain:
-      credentials.yaml > .env > environment variables.
+      sensitive secrets: HuggingFace token, S3 keys, and optional proxy settings.
+      .env (gitignored) stores non-secret parameters: S3 connection params,
+      proxy enable/URL, and feature flags. Priority chain:
+      .env (PROXY_ENABLED/PROXY_URL) > credentials.yaml (proxy.enabled/proxy.url)
+      > environment variables.
     schema:
       credentials_yaml:
         - huggingface.token (str)
         - s3.access_key_id (str)
         - s3.secret_access_key (str)
+        - proxy.enabled (bool, optional)
+        - proxy.url (str, optional)
       env:
+        - PROXY_ENABLED (true|false)
+        - PROXY_URL (str — http/https/socks5/socks5h scheme)
         - HF_HUB_ENABLE_HF_TRANSFER (0|1)
         - S3_BUCKET (str)
         - S3_REGION (str)
@@ -271,7 +279,9 @@ quality_attributes:
       S3 backend is abstracted behind S3Config and boto3 kwargs, supporting AWS,
       MinIO, Yandex Object Storage, and Cloudflare R2 via endpoint_url override.
       hf_transfer (Rust-based) is an optional accelerator enabled by environment
-      variable, with graceful fallback.
+      variable, with graceful fallback. Proxy support covers all outbound traffic
+      (HuggingFace Hub + S3) via two env vars (PROXY_ENABLED, PROXY_URL) with
+      fallback to credentials.yaml; supports http, https, socks5, socks5h schemes.
 
   - attribute: usability
     description: >
@@ -314,3 +324,12 @@ external_integrations:
     library: hf_transfer
     optional: true
     usage: "Rust-based download acceleration, activated by HF_HUB_ENABLE_HF_TRANSFER=1"
+
+  - name: HTTP/SOCKS Proxy
+    type: network
+    library: "requests[socks] (PySocks)"
+    optional: false
+    usage: >
+      SOCKS5/5h proxy routing for all outbound HTTPS connections.
+      Configured via PROXY_ENABLED + PROXY_URL env vars or credentials.yaml proxy: section.
+      http/https schemes work without extra deps; socks5/socks5h require PySocks (bundled).

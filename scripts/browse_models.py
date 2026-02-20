@@ -18,6 +18,7 @@ AI Model Browser
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import textwrap
@@ -29,7 +30,7 @@ from dotenv import load_dotenv
 
 # Shared utilities
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import load_hf_token  # noqa: E402
+from utils import load_hf_token, load_proxy_config  # noqa: E402
 
 
 # ─── Search ───────────────────────────────────────────────────────────────────
@@ -43,18 +44,24 @@ def search_models(
     limit: int,
     token: Optional[str],
     sort: str = "downloads",
+    pipeline_tag: Optional[str] = None,
+    library: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> list:
     """
     Ищет модели на HuggingFace Hub.
 
     Args:
-        query:  полнотекстовый поиск (по имени и описанию)
-        author: фильтр по автору/организации (точное совпадение)
-        tags:   список тегов для фильтрации
-        regex:  regex-паттерн по model_id (применяется после API-запроса)
-        limit:  максимальное кол-во результатов в итоге
-        token:  HF-токен
-        sort:   сортировка результатов (downloads | likes | lastModified)
+        query:        полнотекстовый поиск (по имени и описанию)
+        author:       фильтр по автору/организации (точное совпадение)
+        tags:         список тегов для фильтрации
+        regex:        regex-паттерн по model_id (применяется после API-запроса)
+        limit:        максимальное кол-во результатов в итоге
+        token:        HF-токен
+        sort:         сортировка (downloads | likes | lastModified)
+        pipeline_tag: задача модели (text-generation, text-to-image, ...)
+        library:      формат/библиотека (gguf, safetensors, transformers, ...)
+        language:     язык модели (ru, en, zh, ...)
 
     Returns список ModelInfo объектов.
     """
@@ -76,6 +83,12 @@ def search_models(
         kwargs["author"] = author
     if tags:
         kwargs["filter"] = tags
+    if pipeline_tag:
+        kwargs["pipeline_tag"] = pipeline_tag
+    if library:
+        kwargs["library"] = library
+    if language:
+        kwargs["language"] = language
 
     models = list(api.list_models(**kwargs))
 
@@ -120,17 +133,18 @@ def print_models_table(models: list) -> None:
         return
 
     print(
-        f"\n{'#':<4}  {'MODEL ID':<55}  {'DOWNLOADS':>9}  {'LIKES':>6}  ТЕГИ"
+        f"\n{'#':<4}  {'MODEL ID':<52}  {'TASK':<22}  {'DOWNLOADS':>9}  {'LIKES':>6}  ТЕГИ"
     )
-    print("-" * 115)
+    print("-" * 130)
     for i, m in enumerate(models, 1):
         dl = getattr(m, "downloads", 0) or 0
         likes = getattr(m, "likes", 0) or 0
+        task = getattr(m, "pipeline_tag", None) or ""
         tags_raw = getattr(m, "tags", None) or []
         # Показываем только значимые теги (не license:, arxiv:, и т.п.)
-        tags = [t for t in tags_raw if ":" not in t][:5]
-        tags_str = textwrap.shorten(", ".join(tags), 35)
-        print(f"{i:<4}  {m.id:<55}  {dl:>9,}  {likes:>6}  {tags_str}")
+        tags = [t for t in tags_raw if ":" not in t][:4]
+        tags_str = textwrap.shorten(", ".join(tags), 30)
+        print(f"{i:<4}  {m.id:<52}  {task:<22}  {dl:>9,}  {likes:>6}  {tags_str}")
     print(f"\nНайдено: {len(models)} моделей\n")
 
 
@@ -204,6 +218,34 @@ def build_parser() -> argparse.ArgumentParser:
         help="Regex-фильтр по model_id (регистронезависимый, применяется после API-запроса)",
     )
     search_group.add_argument(
+        "--pipeline-tag", "-p",
+        metavar="TASK",
+        help=(
+            "Фильтр по задаче модели (нативный API-параметр HuggingFace).\n"
+            "Переменная окружения: BROWSE_PIPELINE_TAG.\n"
+            "Примеры: text-generation  text-to-image  automatic-speech-recognition\n"
+            "         text-classification  sentence-similarity  image-classification"
+        ),
+    )
+    search_group.add_argument(
+        "--library",
+        metavar="LIB",
+        help=(
+            "Фильтр по формату/библиотеке (нативный API-параметр HuggingFace).\n"
+            "Переменная окружения: BROWSE_LIBRARY.\n"
+            "Примеры: gguf  safetensors  transformers  diffusers  onnx"
+        ),
+    )
+    search_group.add_argument(
+        "--language",
+        metavar="LANG",
+        help=(
+            "Фильтр по языку модели (код ISO 639-1).\n"
+            "Переменная окружения: BROWSE_LANGUAGE.\n"
+            "Примеры: ru  en  zh  de  fr"
+        ),
+    )
+    search_group.add_argument(
         "--sort",
         default="downloads",
         choices=["downloads", "likes", "lastModified"],
@@ -228,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATTERN",
         help=(
             "Regex-фильтр по именам файлов внутри репозитория (автоматически включает --show-files).\n"
+            "Переменная окружения: BROWSE_FILE_REGEX (CLI имеет приоритет).\n"
             "Примеры: 'Q4_K_M\\.gguf$'   '.*14B.*Q4'   '\\.safetensors$'"
         ),
     )
@@ -255,15 +298,38 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
-    if not any([args.query, args.author, args.tags, args.regex]):
+    if not any([args.query, args.author, args.tags, args.regex,
+                args.pipeline_tag, args.library, args.language]):
         print(
             "[ERROR] Укажите хотя бы один параметр поиска:\n"
-            "         --query TEXT | --author NAME | --tags TAG ... | --regex PATTERN",
+            "  --query TEXT | --author NAME | --tags TAG ...\n"
+            "  --pipeline-tag TASK | --library LIB | --language LANG | --regex PATTERN",
             file=sys.stderr,
         )
         return 1
 
     load_dotenv(dotenv_path=".env", override=False)
+
+    # Env-дефолты для фильтров (CLI имеет приоритет над .env)
+    _env_defaults = [
+        ("file_regex",    "BROWSE_FILE_REGEX"),
+        ("pipeline_tag",  "BROWSE_PIPELINE_TAG"),
+        ("library",       "BROWSE_LIBRARY"),
+        ("language",      "BROWSE_LANGUAGE"),
+    ]
+    for attr, env_key in _env_defaults:
+        if getattr(args, attr, None) is None:
+            val = os.environ.get(env_key, "").strip() or None
+            if val:
+                setattr(args, attr, val)
+                print(f"[INFO] {env_key} из .env: {val!r}")
+
+    # Configure proxy (reads PROXY_ENABLED + PROXY_URL from env / credentials.yaml)
+    proxy_cfg = load_proxy_config(Path(args.creds))
+    if proxy_cfg.valid:
+        proxy_cfg.apply_to_env()
+        print(f"[INFO] Proxy enabled: {proxy_cfg.url}")
+
     token = load_hf_token(Path(args.creds))
 
     show_files = args.show_files or bool(args.file_regex)
@@ -278,6 +344,12 @@ def main() -> int:
         params.append(f"tags={args.tags}")
     if args.regex:
         params.append(f"regex={args.regex!r}")
+    if args.pipeline_tag:
+        params.append(f"pipeline_tag={args.pipeline_tag!r}")
+    if args.library:
+        params.append(f"library={args.library!r}")
+    if args.language:
+        params.append(f"language={args.language!r}")
     if args.file_regex:
         params.append(f"file-regex={args.file_regex!r}")
     print(f"[INFO] Поиск: {', '.join(params)}  (limit={args.limit}, sort={args.sort})")
@@ -291,6 +363,9 @@ def main() -> int:
             limit=args.limit,
             token=token,
             sort=args.sort,
+            pipeline_tag=args.pipeline_tag,
+            library=args.library,
+            language=args.language,
         )
     except Exception as exc:
         print(f"[ERROR] Ошибка HuggingFace API: {exc}", file=sys.stderr)

@@ -15,6 +15,12 @@ description: >
   download pipeline with idempotency, reliability, and storage flexibility.
 
 key_behaviors:
+  proxy:
+    - Calls load_proxy_config() immediately after load_dotenv() in main()
+    - Calls proxy_cfg.apply_to_env() to set HTTP_PROXY/HTTPS_PROXY before any network call
+    - _s3_client() accepts optional proxies dict passed to botocore.config.Config
+    - Supports schemes: http://, https://, socks5://, socks5h://
+    - Logs "[INFO] Proxy enabled: <url>" or "[INFO] Proxy: disabled" at startup
   idempotency:
     - ETag-based change detection (sidecar .etag files)
     - Atomic writes via tempfile + os.replace (no partial files)
@@ -46,7 +52,7 @@ data_classes:
 
 dependencies:
   internal:
-    - utils (fmt_size, load_hf_token)
+    - utils (fmt_size, load_hf_token, load_proxy_config)
     - models-config (models.yaml)
     - credentials-config (credentials.yaml, .env)
   external:
@@ -60,7 +66,10 @@ dependencies:
       usage: "progress bar over model list"
     - name: boto3
       optional: true
-      usage: "S3 client, upload_file, head_object"
+      usage: "S3 client, upload_file, head_object; proxy via botocore.config.Config(proxies=...)"
+    - name: requests[socks]
+      optional: false
+      usage: "PySocks dependency enabling socks5:// and socks5h:// proxy schemes"
     - name: hf_transfer
       optional: true
       usage: "Rust-based download acceleration (activated by env var)"
