@@ -605,7 +605,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
           <div class="hf-add-field wide">
             <label>Описание</label>
-            <input type="text" id="add-description" placeholder="краткое описание модели">
+            <input type="text" id="add-description" placeholder="авто (из результатов поиска)">
           </div>
         </div>
         <div class="hf-add-actions">
@@ -1089,12 +1089,8 @@ function hfShowAddForm() {
   document.getElementById('hf-add-form').style.display = 'block';
   document.getElementById('add-status').className = 'status-msg';
   document.getElementById('add-status').style.display = 'none';
-  // Pre-fill description from first selected item (only if field is empty)
-  const descEl = document.getElementById('add-description');
-  if (!descEl.value.trim()) {
-    const first = hfSelected.values().next().value;
-    if (first && first.description) descEl.value = first.description;
-  }
+  // Clear description — each model will use its own auto-generated description
+  document.getElementById('add-description').value = '';
   document.getElementById('hf-add-form').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
@@ -1120,7 +1116,8 @@ async function hfConfirmAdd() {
       repo_id: item.repo_id, filename: item.filename,
       dest_dir, enabled, gated: item.gated,
       tags: tags.length > 0 ? tags : item.tags,
-      vram_gb, description,
+      vram_gb,
+      description: description || item.description || '',
     });
   }
 
@@ -1487,12 +1484,6 @@ def search_hf(
         pipeline_val = getattr(m, "pipeline_tag", "") or ""
         likes = getattr(m, "likes", 0) or 0
 
-        # Tags: keep non-namespaced tags + ensure pipeline_tag is visible
-        tags_raw = m.tags or []
-        tags = [t for t in tags_raw if ":" not in t and len(t) <= 25][:6]
-        if pipeline_val and pipeline_val not in tags:
-            tags = [pipeline_val] + tags[:5]
-
         # License + auto-generated description from model name
         card = getattr(m, "card_data", None)
         license_val = ""
@@ -1506,6 +1497,32 @@ def search_hf(
             r"[-_]?(?:i\d+[-_]?)?GGUF$", "", repo_name, flags=re.IGNORECASE
         ).strip("-_ ")
         description = clean_name + (f" [{license_val}]" if license_val else "")
+
+        # Build display tags from multiple sources (m.tags may be empty for GGUF repos)
+        _skip_tags = {"transformers", "endpoints_compatible", "conversational",
+                      "text-generation-inference", "has_space", "region:us"}
+        display_tags: list[str] = []
+        # 1. pipeline_tag first
+        if pipeline_val:
+            display_tags.append(pipeline_val)
+        # 2. Non-namespaced HF tags
+        for t in (m.tags or []):
+            if ":" not in t and t not in _skip_tags and len(t) <= 20 and t not in display_tags:
+                display_tags.append(t)
+                if len(display_tags) >= 4:
+                    break
+        # 3. License as tag
+        if license_val and len(license_val) <= 20:
+            lic_tag = license_val.lower()
+            if lic_tag not in display_tags:
+                display_tags.append(lic_tag)
+        # 4. Size extracted from repo name (e.g. "14B" → "14b")
+        size_m = re.search(r"[-_](\d+(?:\.\d+)?)[Bb](?:[-_A-Z]|$)", m.id)
+        if size_m:
+            size_tag = size_m.group(1).rstrip("0").rstrip(".") + "b"
+            if size_tag not in display_tags:
+                display_tags.append(size_tag)
+        tags = display_tags[:6]
 
         results.append({
             "repo_id": m.id,
