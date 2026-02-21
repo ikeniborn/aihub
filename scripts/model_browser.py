@@ -15,6 +15,7 @@ HTTP-сервер для просмотра и управления AI-моде�
 Открыть в браузере: http://localhost:9000
 
 API:
+    GET  /api/settings            — текущие settings из models.yaml (concurrency, bandwidth, timeout)
     GET  /api/models              — список моделей с размерами файлов на диске
     POST /api/save                — обновить enabled в models.yaml атомарно
     GET  /api/search?q=&author=&file_regex=&limit=  — поиск на HuggingFace Hub
@@ -133,8 +134,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   /* ── Controls bar (tab: Мои модели) ── */
   .controls-bar { background: var(--bg-surface); border-bottom: 1px solid var(--border);
-                  padding: 10px 24px; display: flex; align-items: center;
+                  padding: 8px 24px; display: flex; align-items: center;
                   gap: 10px; flex-wrap: wrap; }
+  .dl-bar { background: var(--bg-elevated); border-bottom: 1px solid var(--border);
+            padding: 7px 24px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .controls-bar input[type=text] {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-primary); padding: 6px 12px; font-size: 0.875rem; width: 220px;
@@ -449,6 +452,15 @@ HTML_PAGE = r"""<!DOCTYPE html>
     color: var(--text-primary); font-size: 0.82rem; text-align: center;
   }
   .dl-ctrl-input:focus { outline: none; border-color: var(--accent); }
+  .dl-save-btn {
+    padding: 4px 10px; font-size: 0.78rem; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg-elevated);
+    color: var(--text-secondary); transition: color 0.15s, border-color 0.15s, background 0.15s;
+    white-space: nowrap;
+  }
+  .dl-save-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-surface); }
+  .dl-save-btn.saved  { border-color: var(--green); color: var(--green); }
+  .dl-save-btn.error  { border-color: var(--red);   color: var(--red); }
 
   /* ── Download Panel ── */
   .download-panel {
@@ -468,6 +480,14 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .dl-progress-bar {
     background: var(--accent); height: 100%; border-radius: 4px;
     transition: width 0.4s ease; width: 0%;
+  }
+  @keyframes dl-indeterminate {
+    0%   { transform: translateX(-150%); }
+    100% { transform: translateX(550%); }
+  }
+  .dl-progress-bar.indeterminate {
+    width: 20% !important; transition: none;
+    animation: dl-indeterminate 1.4s ease-in-out infinite;
   }
   .dl-log {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 5px;
@@ -512,18 +532,26 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <!-- ═══════════════════════ TAB: Мои модели ═══════════════════════ -->
 <div id="tab-my-models" class="tab-panel active">
+  <!-- Блок 1: Фильтры и управление списком -->
   <div class="controls-bar">
     <input type="text" id="search" placeholder="Поиск по модели, описанию..." oninput="applyFilters()">
     <div class="tag-filter" id="tag-filter"></div>
     <label class="toggle-label">
+      <input type="checkbox" id="only-enabled" onchange="applyFilters()">
+      только enabled
+    </label>
+    <label class="toggle-label">
       <input type="checkbox" id="only-downloaded" onchange="applyFilters()">
       только скачанные
     </label>
-    <button class="btn-primary" id="save-btn" onclick="saveChanges()" disabled style="margin-left:auto">Сохранить</button>
+    <button class="btn-primary" id="save-btn" onclick="saveChanges()" disabled style="margin-left:auto">Сохранить изменения</button>
     <span class="status-msg" id="save-msg"></span>
+  </div>
+  <!-- Блок 2: Параметры и запуск загрузки -->
+  <div class="dl-bar">
     <div class="dl-controls" id="dl-controls">
       <div class="dl-ctrl-group">
-        <span class="dl-ctrl-label" title="Максимум параллельных диапазонных запросов к серверу (HF_XET_NUM_CONCURRENT_RANGE_GETS для hf-xet, HF_HUB_DOWNLOAD_CONCURRENCY для стандартного HTTP).&#10;Меньше = меньше нагрузка на канал. Рекомендуется: 2-4.">Параллельность:</span>
+        <span class="dl-ctrl-label" title="Параллельных range-get запросов (HF_XET_NUM_CONCURRENT_RANGE_GETS).&#10;Уменьшает число TCP-соединений, но не ограничивает скорость канала.&#10;Для жёсткого лимита используйте поле «Лимит Mbit/s».">Параллельность:</span>
         <input type="number" id="dl-concurrency" class="dl-ctrl-input" value="4" min="1" max="64" step="1">
       </div>
       <div class="dl-ctrl-group">
@@ -531,10 +559,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <input type="number" id="dl-timeout" class="dl-ctrl-input" value="2" min="0" max="48" step="0.5">
       </div>
       <div class="dl-ctrl-group">
-        <span class="dl-ctrl-label" title="Мягкий лимит скорости загрузки в Mbit/s.&#10;Устанавливается через авто-расчёт параллельности (concurrency = Mbit/25).&#10;Для жёсткого лимита используйте tc/wondershaper на уровне ОС.&#10;0 или пусто = без лимита. Перекрывает поле Параллельность.">Лимит Mbit/s:</span>
-        <input type="number" id="dl-bandwidth" class="dl-ctrl-input" value="" min="0" max="10000" step="10" placeholder="∞">
+        <span class="dl-ctrl-label" title="Жёсткий лимит скорости загрузки через tc ingress policing.&#10;Применяется на сетевом интерфейсе — ограничивает входящий трафик.&#10;Снимается автоматически при завершении. 0 или пусто = без лимита.">Лимит Mbit/s:</span>
+        <input type="number" id="dl-bandwidth" class="dl-ctrl-input" value="" min="0" max="10000" step="5" placeholder="∞">
       </div>
-      <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели">Скачать enabled</button>
+      <button class="dl-save-btn" id="dl-save-btn" onclick="saveSettings()" title="Сохранить параметры в models.yaml">Сохранить настройки</button>
+      <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели">▶ Скачать enabled</button>
     </div>
     <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none;margin-left:auto">Отменить</button>
     <span class="status-msg" id="dl-status-msg"></span>
@@ -779,6 +808,7 @@ function toggleTag(tag, btn) {
 
 function applyFilters() {
   const q = document.getElementById('search').value.toLowerCase().trim();
+  const onlyEnabled = document.getElementById('only-enabled').checked;
   const onlyDl = document.getElementById('only-downloaded').checked;
   const tbody = document.getElementById('models-body');
   const rows = Array.from(tbody.querySelectorAll('tr'));
@@ -791,6 +821,12 @@ function applyFilters() {
     if (!m) return;
     let show = true;
     if (q && !(m.repo_id + ' ' + m.filename + ' ' + (m.description || '')).toLowerCase().includes(q)) show = false;
+    // Check enabled state — prefer unsaved change if present
+    if (show && onlyEnabled) {
+      const key = m.repo_id + '::' + m.filename;
+      const effectiveEnabled = key in changes ? changes[key] : m.enabled;
+      if (!effectiveEnabled) show = false;
+    }
     if (show && onlyDl && !m.downloaded) show = false;
     if (show && activeTags.size > 0) {
       const mt = new Set(m.tags || []);
@@ -1715,16 +1751,72 @@ function dlToggleLog() {
 let _dlEventSource = null;
 let _dlLastData = null;
 
+// ─── Shared SSE message handler ───────────────────────────────────────────────
+function _dlOnMessage(d) {
+  if (d.current) {
+    document.getElementById('dl-current').textContent = d.current;
+  }
+
+  // Progress bar — indeterminate animation while file is downloading (progress=0)
+  const barEl = document.getElementById('dl-progress-bar');
+  if (d.running && d.progress === 0) {
+    barEl.classList.add('indeterminate');
+  } else {
+    barEl.classList.remove('indeterminate');
+    barEl.style.width = (d.progress || 0) + '%';
+  }
+
+  if (d.model_count > 0) {
+    document.getElementById('dl-counter').textContent =
+      d.done_count + ' / ' + d.model_count;
+  }
+
+  if (d.log && d.log.length > 0) {
+    const logEl = document.getElementById('dl-log');
+    const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
+    logEl.innerHTML = d.log.map(line => {
+      let cls = '';
+      if (/\[SKIP\]/.test(line))      cls = 'log-skip';
+      else if (/\[OK\]/.test(line))   cls = 'log-ok';
+      else if (/\[ERR/.test(line))    cls = 'log-err';
+      else if (/\[WORKER/.test(line)) cls = 'log-warn';
+      return cls ? `<span class="${cls}">${escHtml(line)}</span>` : escHtml(line);
+    }).join('\n');
+    if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  _dlLastData = d;
+  if (!d.running) { dlDone(); }
+}
+
+// ─── Attach panel + SSE (called after start or on page-load resume) ──────────
+function dlAttach() {
+  const controls = document.getElementById('dl-controls');
+  const cancelBtn = document.getElementById('dl-cancel-btn');
+  const panel = document.getElementById('download-panel');
+  controls.style.display = 'none';
+  cancelBtn.style.display = '';
+  cancelBtn.disabled = false;
+  panel.style.display = '';
+  document.getElementById('dl-cancel-btn-panel').style.display = '';
+  document.getElementById('dl-cancel-btn-panel').disabled = false;
+  if (_dlEventSource) { _dlEventSource.close(); }
+  _dlEventSource = new EventSource('/api/download/stream');
+  _dlEventSource.onmessage = function(e) {
+    let d; try { d = JSON.parse(e.data); } catch(_) { return; }
+    _dlOnMessage(d);
+  };
+  _dlEventSource.onerror = function() { dlDone(); };
+}
+
 async function dlStart() {
   const startBtn  = document.getElementById('dl-start-btn');
-  const cancelBtn = document.getElementById('dl-cancel-btn');
-  const panel     = document.getElementById('download-panel');
   const statusMsg = document.getElementById('dl-status-msg');
-  const controls  = document.getElementById('dl-controls');
 
-  const concurrency = parseInt(document.getElementById('dl-concurrency').value, 10) || 4;
-  const timeout     = parseFloat(document.getElementById('dl-timeout').value) ?? 2;
-  // bandwidth_limit: 0 or empty string → null (no limit); positive number → Mbit/s soft cap
+  const _concRaw = parseInt(document.getElementById('dl-concurrency').value, 10);
+  const concurrency = (_concRaw > 0) ? _concRaw : 4;
+  const _toRaw  = parseFloat(document.getElementById('dl-timeout').value);
+  const timeout = (!isNaN(_toRaw) && _toRaw >= 0) ? _toRaw : 2;
   const _bwRaw  = parseFloat(document.getElementById('dl-bandwidth').value);
   const bandwidth = (!isNaN(_bwRaw) && _bwRaw > 0) ? _bwRaw : null;
 
@@ -1752,68 +1844,13 @@ async function dlStart() {
     return;
   }
 
-  // Hide controls and start button, show cancel
-  controls.style.display = 'none';
-  cancelBtn.style.display = '';
-  cancelBtn.disabled = false;
-  panel.style.display = '';
-  document.getElementById('dl-cancel-btn-panel').style.display = '';
-  document.getElementById('dl-cancel-btn-panel').disabled = false;
   _dlLastData = null;
   document.getElementById('dl-log').textContent = '';
   document.getElementById('dl-current').textContent = '—';
+  document.getElementById('dl-progress-bar').classList.remove('indeterminate');
   document.getElementById('dl-progress-bar').style.width = '0%';
   document.getElementById('dl-counter').textContent = '';
-
-  // Open SSE stream
-  if (_dlEventSource) { _dlEventSource.close(); }
-  _dlEventSource = new EventSource('/api/download/stream');
-
-  _dlEventSource.onmessage = function(e) {
-    let d;
-    try { d = JSON.parse(e.data); } catch(_) { return; }
-
-    // Update current model
-    if (d.current) {
-      document.getElementById('dl-current').textContent = d.current;
-    }
-
-    // Update progress bar
-    document.getElementById('dl-progress-bar').style.width = (d.progress || 0) + '%';
-
-    // Update counter
-    if (d.model_count > 0) {
-      document.getElementById('dl-counter').textContent =
-        d.done_count + ' / ' + d.model_count;
-    }
-
-    // Update log: smart scroll (auto-scroll only if already at bottom) + colored lines
-    if (d.log && d.log.length > 0) {
-      const logEl = document.getElementById('dl-log');
-      const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 20;
-      logEl.innerHTML = d.log.map(line => {
-        let cls = '';
-        if (/\[SKIP\]/.test(line))   cls = 'log-skip';
-        else if (/\[OK\]/.test(line)) cls = 'log-ok';
-        else if (/\[ERR/.test(line))  cls = 'log-err';
-        else if (/\[WORKER/.test(line)) cls = 'log-warn';
-        return cls ? `<span class="${cls}">${escHtml(line)}</span>` : escHtml(line);
-      }).join('\n');
-      if (atBottom) logEl.scrollTop = logEl.scrollHeight;
-    }
-
-    // Save last snapshot for completion summary
-    _dlLastData = d;
-
-    // Done?
-    if (!d.running) {
-      dlDone();
-    }
-  };
-
-  _dlEventSource.onerror = function() {
-    dlDone();
-  };
+  dlAttach();
 }
 
 function dlDone() {
@@ -1860,6 +1897,83 @@ async function dlCancel() {
 
 // Init
 loadModels();
+loadSettings();
+checkRunningDownload();
+
+// Resume download panel if a download is already running (e.g. after page refresh)
+function checkRunningDownload() {
+  const probe = new EventSource('/api/download/stream');
+  probe.onmessage = function(e) {
+    probe.close();
+    let d; try { d = JSON.parse(e.data); } catch(_) { return; }
+    if (!d.running) return;
+    // Download is in progress — show panel and attach SSE without POSTing /start
+    document.getElementById('dl-start-btn').disabled = true;
+    dlAttach();
+  };
+  probe.onerror = function() { probe.close(); };
+}
+
+async function loadSettings() {
+  try {
+    const resp = await fetch('/api/settings');
+    if (!resp.ok) return;
+    const s = await resp.json();
+    if (s.hf_download_concurrency != null)
+      document.getElementById('dl-concurrency').value = s.hf_download_concurrency;
+    if (s.download_timeout_hours != null)
+      document.getElementById('dl-timeout').value = s.download_timeout_hours;
+    if (s.bandwidth_limit_mbps != null)
+      document.getElementById('dl-bandwidth').value = s.bandwidth_limit_mbps;
+  } catch (_) {}
+}
+
+async function saveSettings() {
+  const btn = document.getElementById('dl-save-btn');
+  btn.disabled = true;
+
+  const concRaw = parseInt(document.getElementById('dl-concurrency').value, 10);
+  const toRaw   = parseFloat(document.getElementById('dl-timeout').value);
+  const bwRaw   = parseFloat(document.getElementById('dl-bandwidth').value);
+
+  // null means "remove from yaml" (no limit); 0 for timeout means disabled
+  const body = {
+    hf_download_concurrency: (concRaw > 0)                    ? concRaw : null,
+    download_timeout_hours:  (!isNaN(toRaw) && toRaw >= 0)    ? toRaw   : null,
+    bandwidth_limit_mbps:    (!isNaN(bwRaw) && bwRaw > 0)     ? bwRaw   : null,
+  };
+
+  try {
+    const resp = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (resp.ok) {
+      btn.textContent = '✓ Сохранено';
+      btn.classList.add('saved');
+      btn.classList.remove('error');
+    } else {
+      btn.textContent = '✗ Ошибка';
+      btn.classList.add('error');
+      btn.classList.remove('saved');
+      console.error('saveSettings error:', data.error);
+    }
+  } catch (e) {
+    btn.textContent = '✗ Ошибка';
+    btn.classList.add('error');
+    btn.classList.remove('saved');
+    console.error('saveSettings fetch error:', e);
+  }
+
+  btn.disabled = false;
+  // Reset button label after 2.5 sec
+  setTimeout(() => {
+    btn.textContent = 'Сохранить';
+    btn.classList.remove('saved', 'error');
+  }, 2500);
+}
 </script>
 </body>
 </html>
@@ -2380,6 +2494,18 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
         if path in ("/", "/index.html"):
             self._send_html(HTML_PAGE)
 
+        elif path == "/api/settings":
+            try:
+                raw = load_yaml(self.config_path)
+                s = raw.get("settings", {})
+                self._send_json({
+                    "hf_download_concurrency": s.get("hf_download_concurrency"),
+                    "bandwidth_limit_mbps":    s.get("bandwidth_limit_mbps"),
+                    "download_timeout_hours":  s.get("download_timeout_hours"),
+                })
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
         elif path == "/api/models":
             try:
                 models = get_models_json(self.config_path)
@@ -2515,6 +2641,43 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "started", "model_count": enabled_count})
             return
 
+        if path == "/api/settings":
+            try:
+                params = json.loads(body) if body else {}
+            except (json.JSONDecodeError, ValueError):
+                params = {}
+            try:
+                raw = load_yaml(self.config_path)
+                s: dict = raw.setdefault("settings", {})
+                # hf_download_concurrency: int or null (removes key → no limit)
+                if "hf_download_concurrency" in params:
+                    v = params["hf_download_concurrency"]
+                    if v is None:
+                        s.pop("hf_download_concurrency", None)
+                    else:
+                        s["hf_download_concurrency"] = int(v)
+                # bandwidth_limit_mbps: float or null (removes key → unlimited)
+                if "bandwidth_limit_mbps" in params:
+                    v = params["bandwidth_limit_mbps"]
+                    if v is None:
+                        s.pop("bandwidth_limit_mbps", None)
+                    else:
+                        s["bandwidth_limit_mbps"] = float(v)
+                # download_timeout_hours: float (0 = no timeout) or null (removes key)
+                if "download_timeout_hours" in params:
+                    v = params["download_timeout_hours"]
+                    if v is None:
+                        s.pop("download_timeout_hours", None)
+                    else:
+                        s["download_timeout_hours"] = float(v)
+                _atomic_yaml_write(self.config_path, raw)
+                self._send_json({"status": "ok"})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+            return
+
         try:
             payload = json.loads(body)
         except json.JSONDecodeError as e:
@@ -2587,7 +2750,7 @@ def _download_worker(
     """
     script = Path(__file__).parent / "download_models.py"
     cmd = [
-        sys.executable, str(script),
+        sys.executable, "-u", str(script),   # -u: force unbuffered stdout (critical when piped)
         "--config", str(config_path),
     ]
     if max_concurrency is not None:
@@ -2610,17 +2773,17 @@ def _download_worker(
         with _dl_lock:
             download_state["process"] = proc
 
+        import re as _re
+        _tqdm_re = _re.compile(r'^\s*(\d+)%\|')  # matches "  52%|████..."
+
         done_count = 0
         model_count = download_state["model_count"] or 1  # avoid div-by-zero
 
         for raw_line in proc.stdout:  # type: ignore[union-attr]
             line = raw_line.rstrip()
-            if not line:
-                continue
 
-            # Strip tqdm carriage-return lines (progress bar artifacts)
+            # tqdm refreshes via carriage return — keep only the last (most recent) value
             if "\r" in line:
-                # Keep only the last segment after the last \r
                 line = line.rsplit("\r", 1)[-1].strip()
             if not line:
                 continue
@@ -2629,19 +2792,65 @@ def _download_worker(
                 if download_state["cancelled"]:
                     break
 
+                # [PROGRESS] idx/total — model-level marker, don't add to log
+                if line.startswith("[PROGRESS]"):
+                    try:
+                        parts = line.split()[1].split("/")
+                        done_count = int(parts[0]) - 1
+                        model_count = int(parts[1])
+                        download_state["model_count"] = model_count
+                        download_state["done_count"] = done_count
+                        # Per-file progress starts at 0 until tqdm lines arrive
+                        base_pct = int(done_count * 100 / max(model_count, 1))
+                        download_state["progress"] = min(base_pct, 99)
+                    except (IndexError, ValueError):
+                        pass
+                    continue
+
+                # [FILESIZE] N — expected total bytes for current file (from HF metadata)
+                if line.startswith("[FILESIZE]"):
+                    continue  # informational only, don't add to log
+
+                # [FILEPROGRESS] current/total — file-size monitor (hf_xet has no tqdm)
+                if line.startswith("[FILEPROGRESS]"):
+                    try:
+                        cur_s, tot_s = line.split()[1].split("/")
+                        cur_b, tot_b = int(cur_s), int(tot_s)
+                        if tot_b > 0:
+                            _mc = max(model_count, 1)
+                            file_pct = int(cur_b * 100 / tot_b)
+                            base_pct = int(done_count * 100 / _mc)
+                            slice_pct = int(100 / _mc)
+                            scaled = base_pct + int(file_pct * slice_pct / 100)
+                            download_state["progress"] = min(scaled, 99)
+                    except (IndexError, ValueError):
+                        pass
+                    continue  # don't add to log
+
+                # tqdm per-file progress line: "  52%|████..." → extract file %
+                # (fallback for non-xet backends that do emit tqdm)
+                m = _tqdm_re.match(line)
+                if m:
+                    file_pct = int(m.group(1))   # 0-100 within current file
+                    _mc = max(model_count, 1)
+                    # Scale file progress into the slice for this model: [base, base+slice)
+                    base_pct = int(done_count * 100 / _mc)
+                    slice_pct = int(100 / _mc)
+                    scaled = base_pct + int(file_pct * slice_pct / 100)
+                    download_state["progress"] = min(scaled, 99)
+                    continue  # don't add tqdm lines to log
+
                 download_state["log"].append(line)
-                # Keep log bounded
                 if len(download_state["log"]) > 500:
                     download_state["log"] = download_state["log"][-400:]
 
                 # Parse model start: lines like "[ModelName]" from download_models.py
-                if line.startswith("[") and line.endswith("]") and not line.startswith("[INFO]") \
-                        and not line.startswith("[WARN]") and not line.startswith("[ERR") \
-                        and not line.startswith("[DOWNLOAD") and not line.startswith("[SKIP") \
-                        and not line.startswith("[OK"):
+                if (line.startswith("[") and line.endswith("]")
+                        and not any(line.startswith(p) for p in (
+                            "[INFO]", "[WARN]", "[ERR", "[DOWNLOAD", "[SKIP", "[OK", "[FATAL", "[WORKER"))):
                     download_state["current"] = line[1:-1]
 
-                # Parse result lines
+                # Parse result lines → advance done_count and progress
                 for marker, status_key in (("[OK]", "DOWNLOAD"), ("[SKIP]", "SKIP"), ("[ERR]", "ERROR")):
                     if f"  {marker}" in line or line.startswith(marker):
                         cur = download_state["current"]
@@ -2649,7 +2858,8 @@ def _download_worker(
                             download_state["status_map"][cur] = status_key
                         done_count += 1
                         download_state["done_count"] = done_count
-                        pct = int(done_count * 100 / model_count)
+                        _mc = download_state["model_count"] or 1
+                        pct = int(done_count * 100 / _mc)
                         download_state["progress"] = min(pct, 99)
                         break
 

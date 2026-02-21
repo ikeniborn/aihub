@@ -30,7 +30,7 @@ from dotenv import load_dotenv
 
 # Shared utilities
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import load_hf_token, load_proxy_config  # noqa: E402
+from utils import load_hf_token, load_proxy_config, mask_proxy_url  # noqa: E402
 
 
 # ─── Search ───────────────────────────────────────────────────────────────────
@@ -341,7 +341,7 @@ def main() -> int:
     proxy_cfg = load_proxy_config(Path(args.creds))
     if proxy_cfg.valid:
         proxy_cfg.apply_to_env()
-        print(f"[INFO] Proxy enabled: {proxy_cfg.url}")
+        print(f"[INFO] Proxy enabled: {mask_proxy_url(proxy_cfg.url)}")
 
     token = load_hf_token(Path(args.creds))
 

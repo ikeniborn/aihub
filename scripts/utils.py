@@ -9,8 +9,28 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Union, Optional
+from urllib.parse import urlparse, urlunparse
 
 import yaml
+
+
+def mask_proxy_url(url: str) -> str:
+    """
+    Маскирует пароль в URL прокси перед выводом в логи.
+    http://user:secret@host:8080 → http://user:***@host:8080
+    URL без пароля возвращается без изменений.
+    """
+    try:
+        parsed = urlparse(url)
+        if parsed.password:
+            masked = parsed._replace(
+                netloc=f"{parsed.username}:***@{parsed.hostname}"
+                + (f":{parsed.port}" if parsed.port else "")
+            )
+            return urlunparse(masked)
+    except Exception:  # noqa: BLE001
+        pass
+    return url
 
 
 def fmt_size(n: Union[int, float]) -> str:

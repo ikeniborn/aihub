@@ -45,11 +45,47 @@ proxy:
 ## HuggingFace
 
 ```dotenv
-# Быстрые загрузки через Rust-библиотеку hf_transfer
-HF_HUB_ENABLE_HF_TRANSFER=1
+# Максимальная скорость через hf-xet (протокол по умолчанию с 2025 г.)
+# Включает агрессивные настройки параллельности и кэширования.
+# Не устанавливайте, если хотите ограничить пропускную способность.
+# HF_XET_HIGH_PERFORMANCE=1
 ```
 
+> **Устаревшее:** `# HF_XET_HIGH_PERFORMANCE=1   # раскомментировать для максимальной скорости` — не имеет эффекта когда установлен hf-xet,
+> и вызывает предупреждение в логе. Удалите эту строку из `.env`.
+> Аналог для hf-xet: `HF_XET_HIGH_PERFORMANCE=1` (раскомментируйте выше при необходимости).
+
 > **HF_TOKEN** — только в `credentials.yaml` (секция `huggingface.token`), не в `.env`.
+
+---
+
+## Контроль нагрузки на канал
+
+> **Эти параметры НЕ задаются через `.env`** — они находятся в секции `settings:` файла `models.yaml`.
+> В `.env` есть только `HF_HUB_ENABLE_HF_TRANSFER`. Остальное — ниже.
+
+```yaml
+# models.yaml → settings:
+hf_download_concurrency: 4    # макс. параллельных TCP-соединений HuggingFace Xet
+                               # null = без ограничений (может открыть 49+ соединений!)
+download_timeout_hours: 2     # таймаут на один файл в часах; 0 = без ограничений
+bandwidth_limit_mbps: null    # лимит скорости в Mbit/s для стандартного HTTP (не Xet)
+```
+
+Переопределить для одного запуска через CLI или через **веб-интерфейс** (панель перед кнопкой «Скачать enabled»):
+
+```bash
+python scripts/download_models.py --max-concurrency 2 --download-timeout 3
+```
+
+| Параметр | Где задаётся | Влияет на |
+|---|---|---|
+| `hf_download_concurrency` | `models.yaml` / `--max-concurrency` / UI | Xet-протокол (параллельные TCP) |
+| `download_timeout_hours` | `models.yaml` / `--download-timeout` / UI | Таймаут на один файл |
+| `bandwidth_limit_mbps` | `models.yaml` / `--bandwidth-limit` | Только стандартный HTTP, не Xet |
+
+> Для жёсткого ограничения Xet используйте `hf_download_concurrency` или `wondershaper` на уровне ОС.
+> Подробнее: [docs/GUIDES.md → раздел 9](GUIDES.md#9-контроль-нагрузки-на-канал)
 
 ---
 
@@ -140,7 +176,7 @@ S3_PREFIX=models
 ### Локальная разработка, только GGUF LLM
 
 ```dotenv
-HF_HUB_ENABLE_HF_TRANSFER=1
+# HF_XET_HIGH_PERFORMANCE=1   # раскомментировать для максимальной скорости
 
 BROWSE_PIPELINE_TAG=text-generation
 BROWSE_LIBRARY=gguf
@@ -166,7 +202,7 @@ BROWSE_FILE_REGEX=Q4_K_M\.gguf$
 ### Image generation (ComfyUI / A1111)
 
 ```dotenv
-HF_HUB_ENABLE_HF_TRANSFER=1
+# HF_XET_HIGH_PERFORMANCE=1   # раскомментировать для максимальной скорости
 
 BROWSE_PIPELINE_TAG=text-to-image
 BROWSE_LIBRARY=safetensors

@@ -26,6 +26,9 @@ models/
 credentials.yaml
 credentials.*.yaml
 
+# Process lock file (download_models.py runtime artifact)
+.download.lock
+
 # Python
 __pycache__/
 *.py[cod]

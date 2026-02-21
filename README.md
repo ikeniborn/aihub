@@ -77,11 +77,15 @@ S3_ENDPOINT_URL=               # пусто для AWS; для Yandex/MinIO — 
 --retries N             количество повторов (default: 3)
 --retry-delay SECS      базовая задержка между повторами (default: 5s)
 --delay SECS            пауза между моделями (default: 0)
+--max-concurrency N     макс. параллельных TCP-соединений HuggingFace Xet (default из yaml: 4)
+--bandwidth-limit MBIT  ограничение скорости в Mbit/s для стандартного HTTP
+--download-timeout HRS  таймаут на один файл в часах; при превышении — выход (default из yaml: 2)
 --config FILE           путь к models.yaml
 --creds FILE            путь к credentials.yaml
 ```
 
 HTTP 429 (rate limit) обрабатывается автоматически: задержка ×10 от базовой.
+Одновременно может работать только один процесс загрузки (PID lock `.download.lock`).
 
 ### `browse_models.py` — поиск на HuggingFace Hub
 
@@ -122,7 +126,10 @@ settings:
   update_policy: etag        # etag | skip | always
   retry_count: 3
   retry_delay: 5.0
-  inter_download_delay: 0
+  inter_download_delay: 60
+  hf_download_concurrency: 4    # макс. параллельных TCP при Xet-протоколе (null = без ограничений)
+  download_timeout_hours: 2     # таймаут на файл в часах; 0 = без ограничений
+  bandwidth_limit_mbps: null    # лимит Mbit/s для стандартного HTTP (null = без ограничений)
 
 models:
   - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
@@ -144,7 +151,7 @@ aihub/
 ├── models.yaml                  # список моделей
 ├── requirements.txt             # зависимости (для совместимости с CI/CD)
 ├── pyproject.toml               # конфигурация проекта (PEP 517, uv-совместимый)
-├── Makefile                     # команды: setup, download, browse, ui, list, update
+├── Makefile                     # команды: setup, download, browse, ui, list, update, security-check
 ├── .python-version              # версия Python (3.9)
 ├── credentials.yaml.example     # шаблон секретов
 ├── .env.example                 # шаблон параметров
@@ -169,3 +176,11 @@ aihub/
 | `.env` | **ignored** | параметры конфигурации |
 | `models/` | **ignored** | бинарные веса моделей |
 | `*.etag` | **ignored** | файлы состояния загрузки |
+| `.download.lock` | **ignored** | PID-файл защиты от параллельного запуска |
+
+```bash
+chmod 600 credentials.yaml   # обязательно после создания
+make security-check           # проверить права, .gitignore и наличие токенов в коде
+```
+
+Пароли в `PROXY_URL` автоматически маскируются в логах: `http://user:***@host:port`.

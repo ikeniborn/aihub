@@ -45,7 +45,6 @@ from typing import Any, Optional, Union
 
 import yaml
 from dotenv import load_dotenv
-from tqdm import tqdm
 
 # Shared utilities (fmt_size, load_hf_token, load_proxy_config)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -56,6 +55,131 @@ from utils import fmt_size, load_hf_token, load_proxy_config, mask_proxy_url  # 
 
 
 _LOCK_FILE = Path(__file__).parent.parent / ".download.lock"
+
+
+# ─── Hard Bandwidth Cap (tc ingress police) ────────────────────────────────────
+#
+# hf_xet has no byte-rate-limiting capability — only concurrency control.
+# Even with NUM_CONCURRENT_RANGE_GETS=1, a single S3 range-get saturates a
+# 100 Mbit link (30-50 MB blocks delivered at full line speed).
+#
+# IMPORTANT: downloads are *ingress* traffic.  tc tbf on "root" only shapes
+# egress (outgoing ACKs) and does NOT limit received bytes.
+#
+# Correct approach: tc ingress qdisc + police filter.
+# All incoming IP packets exceeding the rate are *dropped*; TCP congestion
+# control reduces the send window and the source backs off within ~1-2 RTTs.
+#
+#   tc qdisc  add dev <iface> handle ffff: ingress
+#   tc filter add dev <iface> parent ffff: protocol ip u32 match u32 0 0 \
+#             police rate <N>mbit burst <B>mb drop flowid :1
+#
+# Burst = rate_mbps * 0.1 / 8 MB  ≈ 100 ms worth of data (minimum 1 MB).
+# Cleanup is registered via atexit so the rule is removed on any exit path.
+
+
+def _detect_default_iface() -> Optional[str]:
+    """Return the network interface used for the default route (e.g. enp1s0)."""
+    import subprocess as _sp
+    try:
+        out = _sp.run(["ip", "route", "show", "default"],
+                      capture_output=True, text=True, timeout=5).stdout
+        parts = out.split()
+        if "dev" in parts:
+            idx = parts.index("dev")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+    except Exception:
+        pass
+    return None
+
+
+def _tc_cmd(args: list, use_sudo: bool) -> bool:
+    """Run a tc command, optionally prefixed with sudo. Returns True on success."""
+    import shutil as _shutil
+    import subprocess as _sp
+    tc_bin = _shutil.which("tc") or "/usr/sbin/tc"
+    prefix = ["sudo"] if use_sudo else []
+    try:
+        r = _sp.run(prefix + [tc_bin] + args,
+                    capture_output=True, text=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_tc_applied_iface: Optional[str] = None   # set when ingress rule is active
+_tc_applied_sudo: Optional[bool] = None   # whether sudo was used
+
+
+def apply_tc_bandwidth_limit(rate_mbps: float) -> bool:
+    """
+    Apply a hard *download* bandwidth cap via tc ingress policing.
+
+    Uses `tc qdisc ingress` + `police` filter — the only tc mechanism that
+    limits received (download) traffic.  Egress TBF is intentionally NOT used
+    because it only shapes outgoing packets (ACKs) and has no effect on how
+    fast the remote server sends data.
+
+    Tries without sudo first, then with sudo (NOPASSWD supported).
+    Registers atexit cleanup to remove the rule on any exit path.
+    Returns True if the rule was applied successfully.
+    """
+    import atexit
+    global _tc_applied_iface, _tc_applied_sudo
+
+    iface = _detect_default_iface()
+    if not iface:
+        return False
+
+    # ~100 ms burst bucket: allows short bursts to smooth TCP behaviour
+    burst_mb = max(1, int(rate_mbps * 0.1 / 8))
+
+    for use_sudo in (False, True):
+        # Always clean up any pre-existing ingress (and legacy root) qdiscs
+        _tc_cmd(["qdisc", "del", "dev", iface, "ingress"], use_sudo=use_sudo)
+        _tc_cmd(["qdisc", "del", "dev", iface, "root"],    use_sudo=use_sudo)
+
+        # Step 1: add ingress qdisc
+        if not _tc_cmd(
+            ["qdisc", "add", "dev", iface, "handle", "ffff:", "ingress"],
+            use_sudo=use_sudo,
+        ):
+            continue
+
+        # Step 2: add police filter — drop packets exceeding the rate
+        ok = _tc_cmd([
+            "filter", "add", "dev", iface,
+            "parent", "ffff:",
+            "protocol", "ip",
+            "u32", "match", "u32", "0", "0",
+            "police", "rate", f"{rate_mbps:.0f}mbit",
+            "burst", f"{burst_mb}mb",
+            "drop", "flowid", ":1",
+        ], use_sudo=use_sudo)
+
+        if ok:
+            _tc_applied_iface = iface
+            _tc_applied_sudo = use_sudo
+            atexit.register(remove_tc_bandwidth_limit)
+            return True
+
+        # Filter failed — clean up the ingress qdisc we just added
+        _tc_cmd(["qdisc", "del", "dev", iface, "ingress"], use_sudo=use_sudo)
+
+    return False
+
+
+def remove_tc_bandwidth_limit() -> None:
+    """Remove the tc ingress rule applied by apply_tc_bandwidth_limit."""
+    global _tc_applied_iface, _tc_applied_sudo
+    iface = _tc_applied_iface
+    if not iface:
+        return
+    use_sudo = _tc_applied_sudo or False
+    _tc_cmd(["qdisc", "del", "dev", iface, "ingress"], use_sudo=use_sudo)
+    _tc_applied_iface = None
+    _tc_applied_sudo = None
 
 
 def _acquire_lock() -> None:
@@ -298,7 +422,7 @@ def check_existing(
         if local_etag is None:
             remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
             if remote_etag is None:
-                tqdm.write(
+                print(
                     f"  [WARN] Cannot determine ETag for {model.repo_id}/{model.filename};"
                     " defaulting to SKIP (use --force to override)"
                 )
@@ -308,14 +432,14 @@ def check_existing(
 
         remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
         if remote_etag is None:
-            tqdm.write(
+            print(
                 f"  [WARN] Cannot fetch remote ETag for {model.repo_id}/{model.filename};"
                 " keeping existing file"
             )
             return "SKIP"
 
         if local_etag != remote_etag:
-            tqdm.write(f"  [INFO] ETag changed — will re-download {model.filename}")
+            print(f"  [INFO] ETag changed — will re-download {model.filename}")
             return "DOWNLOAD"
 
         return "SKIP"
@@ -432,7 +556,7 @@ def s3_upload_file(
         )
 
         endpoint_display = cfg.endpoint_url or "s3.amazonaws.com"
-        tqdm.write(
+        print(
             f"  Uploading to s3://{cfg.bucket}/{key}"
             f"  [{endpoint_display}]  ({fmt_size(file_size)}) ..."
         )
@@ -541,79 +665,118 @@ def download_model(
 
     # ── Perform download with retry ───────────────────────────────────────────
     local_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── File-size probe for progress reporting ────────────────────────────────
+    # hf_xet downloads entirely in Rust and emits no tqdm to stdout.
+    # We get the expected size via HF metadata HEAD request, then poll the
+    # .incomplete file in the local cache every 3 s and emit [FILEPROGRESS].
+    _expected_bytes: Optional[int] = None
+    _monitor_stop = threading.Event()
+    try:
+        from huggingface_hub import get_hf_file_metadata, hf_hub_url as _hf_hub_url
+        _meta = get_hf_file_metadata(_hf_hub_url(model.repo_id, model.filename), token=token)
+        _expected_bytes = getattr(_meta, "size", None)
+        if _expected_bytes:
+            print(f"[FILESIZE] {_expected_bytes}")
+            sys.stdout.flush()
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _monitor_progress() -> None:
+        _cache_dir = local_dir / ".cache" / "huggingface" / "download"
+        while not _monitor_stop.wait(3.0):
+            try:
+                files = list(_cache_dir.glob("*.incomplete")) if _cache_dir.exists() else []
+                if not files:
+                    continue
+                cur = max(f.stat().st_size for f in files if f.exists())
+                tot = _expected_bytes or 0
+                print(f"[FILEPROGRESS] {cur}/{tot}")
+                sys.stdout.flush()
+            except OSError:
+                pass
+
+    if _expected_bytes:
+        _mt = threading.Thread(target=_monitor_progress, daemon=True)
+        _mt.start()
+    else:
+        _mt = None
+
     last_exc: Optional[Exception] = None
+    try:
+        for attempt in range(retry_count + 1):
+            try:
+                if attempt > 0:
+                    print(f"  [RETRY {attempt}/{retry_count}] {model.repo_id}/{model.filename}")
+                else:
+                    print(f"  Downloading {model.repo_id}/{model.filename} ...")
 
-    for attempt in range(retry_count + 1):
-        try:
-            if attempt > 0:
-                tqdm.write(f"  [RETRY {attempt}/{retry_count}] {model.repo_id}/{model.filename}")
-            else:
-                tqdm.write(f"  Downloading {model.repo_id}/{model.filename} ...")
+                downloaded_path = _hf_download_with_timeout(
+                    download_timeout,
+                    repo_id=model.repo_id,
+                    filename=model.filename,
+                    local_dir=str(local_dir),
+                    token=token,
+                )
+                downloaded = Path(downloaded_path)
 
-            downloaded_path = _hf_download_with_timeout(
-                download_timeout,
-                repo_id=model.repo_id,
-                filename=model.filename,
-                local_dir=str(local_dir),
-                token=token,
-            )
-            downloaded = Path(downloaded_path)
+                if not downloaded.is_file():
+                    raise FileNotFoundError(f"Expected file not found after download: {downloaded}")
 
-            if not downloaded.is_file():
-                raise FileNotFoundError(f"Expected file not found after download: {downloaded}")
+                size = downloaded.stat().st_size
+                if size == 0:
+                    raise ValueError("Downloaded file is empty — possible network error")
 
-            size = downloaded.stat().st_size
-            if size == 0:
-                raise ValueError("Downloaded file is empty — possible network error")
+                # If HF placed the file in a cache subdir, copy it to flat dest_dir
+                if downloaded.parent != local_dir:
+                    shutil.copy2(str(downloaded), str(local_file))
+                    downloaded = local_file
 
-            # If HF placed the file in a cache subdir, copy it to flat dest_dir
-            if downloaded.parent != local_dir:
-                shutil.copy2(str(downloaded), str(local_file))
-                downloaded = local_file
+                # Store ETag for future idempotency checks
+                remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
+                if remote_etag:
+                    _write_local_etag(downloaded, remote_etag)
 
-            # Store ETag for future idempotency checks
-            remote_etag = _fetch_remote_etag(model.repo_id, model.filename, token)
-            if remote_etag:
-                _write_local_etag(downloaded, remote_etag)
+                return DownloadResult(
+                    model=model,
+                    status="DOWNLOAD",
+                    local_path=downloaded,
+                    size_bytes=downloaded.stat().st_size,
+                )
 
-            return DownloadResult(
-                model=model,
-                status="DOWNLOAD",
-                local_path=downloaded,
-                size_bytes=downloaded.stat().st_size,
-            )
+            except TimeoutError:
+                raise  # propagate to main() — exit the entire process
+            except EntryNotFoundError:
+                # Файл не найден в репо — не имеет смысла повторять
+                return DownloadResult(
+                    model=model,
+                    status="ERROR",
+                    error=(
+                        f"File '{model.filename}' not found in repo '{model.repo_id}'.\n"
+                        f"  Check the filename at: https://huggingface.co/{model.repo_id}"
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                err_str = str(exc)
+                is_rate_limit = "429" in err_str or "rate limit" in err_str.lower()
 
-        except TimeoutError:
-            raise  # propagate to main() — exit the entire process
-        except EntryNotFoundError:
-            # Файл не найден в репо — не имеет смысла повторять
-            return DownloadResult(
-                model=model,
-                status="ERROR",
-                error=(
-                    f"File '{model.filename}' not found in repo '{model.repo_id}'.\n"
-                    f"  Check the filename at: https://huggingface.co/{model.repo_id}"
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-            err_str = str(exc)
-            is_rate_limit = "429" in err_str or "rate limit" in err_str.lower()
+                if attempt >= retry_count:
+                    break  # все попытки исчерпаны
 
-            if attempt >= retry_count:
-                break  # все попытки исчерпаны
+                # Задержка перед повтором: rate limit — x10 от базовой, остальное — экспоненциально
+                if is_rate_limit:
+                    wait = retry_delay * 10
+                    print(f"  [WARN] Rate limit (429) — ждём {wait:.0f}s перед повтором ...")
+                else:
+                    wait = retry_delay * (2 ** attempt)
+                    print(f"  [WARN] Ошибка (попытка {attempt + 1}/{retry_count + 1}): {exc}")
+                    print(f"         Повтор через {wait:.0f}s ...")
+                time.sleep(wait)
 
-            # Задержка перед повтором: rate limit — x10 от базовой, остальное — экспоненциально
-            if is_rate_limit:
-                wait = retry_delay * 10
-                tqdm.write(f"  [WARN] Rate limit (429) — ждём {wait:.0f}s перед повтором ...")
-            else:
-                wait = retry_delay * (2 ** attempt)
-                tqdm.write(f"  [WARN] Ошибка (попытка {attempt + 1}/{retry_count + 1}): {exc}")
-                tqdm.write(f"         Повтор через {wait:.0f}s ...")
-            time.sleep(wait)
-
-    return DownloadResult(model=model, status="ERROR", error=str(last_exc))
+        return DownloadResult(model=model, status="ERROR", error=str(last_exc))
+    finally:
+        _monitor_stop.set()
 
 
 # ─── S3 Sync ──────────────────────────────────────────────────────────────────
@@ -653,22 +816,22 @@ def sync_model_to_s3(
 
     if s3_decision == "SKIP":
         result.s3_status = "SKIP"
-        tqdm.write(f"  [S3-SKIP] Already in s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
+        print(f"  [S3-SKIP] Already in s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
         return result
 
     if s3_decision == "ERROR":
         result.s3_status = "ERROR"
         result.s3_error = "Cannot reach S3 (check credentials / endpoint)"
-        tqdm.write(f"  [S3-ERR]  {result.s3_error}")
+        print(f"  [S3-ERR]  {result.s3_error}")
         return result
 
     status, error = s3_upload_file(result.local_path, result.model, s3_cfg)
     result.s3_status = status
     result.s3_error = error
     if status == "UPLOADED":
-        tqdm.write(f"  [S3-OK]   Uploaded to s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
+        print(f"  [S3-OK]   Uploaded to s3://{s3_cfg.bucket}/{_s3_key(result.model, s3_cfg.prefix)}")
     else:
-        tqdm.write(f"  [S3-ERR]  Upload failed: {error}")
+        print(f"  [S3-ERR]  Upload failed: {error}")
 
     return result
 
@@ -905,6 +1068,51 @@ def main() -> int:
     # Load .env first (lowest priority — credentials.yaml overrides these)
     load_dotenv(dotenv_path=".env", override=False)
 
+    # ── Early concurrency + segment-size cap ──────────────────────────────────
+    # HF_XET_NUM_CONCURRENT_RANGE_GETS limits the number of simultaneous
+    # HTTP range-GET *requests* at the outer level, but each request fetches a
+    # *segment* that internally contains HF_XET_NUM_RANGE_IN_SEGMENT_BASE chunks.
+    # With default RANGE_IN_SEGMENT_BASE≈16 and RANGE_GETS=2 you still get
+    # 2×16=32 simultaneous chunk fetches → network saturation.
+    # The only way to actually cap bandwidth via hf-xet env vars is to set BOTH:
+    #   HF_XET_NUM_CONCURRENT_RANGE_GETS — outer request concurrency
+    #   HF_XET_NUM_RANGE_IN_SEGMENT_BASE/MAX/DELTA — inner segment size
+    #
+    # Rust lazy statics (once_cell) read env vars on first use of the limiter,
+    # not at import time — so setting them before the first download_files() call
+    # is sufficient. We set them here early anyway (before import hf_xet in the
+    # backend detection block) as an extra safety measure.
+    _early_settings: dict = {}
+    _early_config = Path(args.config)
+    if _early_config.is_file():
+        try:
+            with open(_early_config) as _f:
+                _raw_cfg = yaml.safe_load(_f) or {}
+            _early_settings = _raw_cfg.get("settings", {})
+        except Exception:
+            pass
+
+    _pre_yaml_concurrency = _early_settings.get("hf_download_concurrency")
+    _pre_concurrency: Optional[int] = (
+        args.max_concurrency if args.max_concurrency is not None
+        else (int(_pre_yaml_concurrency) if _pre_yaml_concurrency is not None else None)
+    )
+    _pre_yaml_bw = _early_settings.get("bandwidth_limit_mbps")
+    _pre_bw: Optional[float] = (
+        args.bandwidth_limit if args.bandwidth_limit is not None
+        else (float(_pre_yaml_bw) if _pre_yaml_bw is not None else None)
+    )
+    if _pre_bw is not None and _pre_concurrency is None:
+        _pre_concurrency = max(1, int(_pre_bw / 25))
+
+    if _pre_concurrency is not None:
+        _pre_conc_str = str(_pre_concurrency)
+        # HF_XET_NUM_CONCURRENT_RANGE_GETS — only confirmed hf-xet concurrency var
+        os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] = _pre_conc_str
+        # HF_HUB_DOWNLOAD_CONCURRENCY — fallback for standard HTTP backend
+        os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = _pre_conc_str
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Prevent multiple simultaneous instances — one download process at a time
     _acquire_lock()
 
@@ -936,12 +1144,6 @@ def main() -> int:
         try:
             import hf_xet  # noqa: F401
             _active_backend = "xet"
-            if _hf_transfer_requested:
-                print(
-                    "[WARN] HF_HUB_ENABLE_HF_TRANSFER=1 is set but hf-xet is active — "
-                    "HF_HUB_ENABLE_HF_TRANSFER is deprecated and has no effect when hf-xet is installed. "
-                    "Use HF_XET_HIGH_PERFORMANCE=1 for maximum download speed instead."
-                )
             print("[INFO] Download backend: hf-xet (Xet storage backend, chunk-based deduplication)")
         except ImportError:
             _xet_disabled = True  # hf-xet not installed, treat as disabled
@@ -1004,16 +1206,19 @@ def main() -> int:
     else:
         print("[INFO] Download timeout: disabled (set download_timeout_hours in models.yaml)")
 
-    # Bandwidth throttling: CLI overrides models.yaml, models.yaml overrides system default.
+    # Bandwidth throttling.
     #
-    # Concurrency env vars by backend:
-    #   hf-xet (default):    HF_XET_NUM_CONCURRENT_RANGE_GETS  (default: 16 range-gets per file)
-    #   hf_transfer (legacy): HF_HUB_DOWNLOAD_CONCURRENCY       (chunk concurrency)
-    #   standard HTTP:        HF_HUB_DOWNLOAD_CONCURRENCY       (chunk concurrency)
+    # hf_xet has NO byte-rate-limiting capability — only concurrency control.
+    # Even with NUM_CONCURRENT_RANGE_GETS=1, a single S3 range-get delivers
+    # a ~30-50 MB block at full link speed → saturates a 100 Mbit channel.
     #
-    # bandwidth_limit_mbps is not enforced by a hardware token-bucket — instead it drives
-    # automatic concurrency calculation as a soft cap approximation. For a hard bandwidth cap
-    # use OS-level tools: tc/wondershaper/trickle.
+    # Hard cap strategy: when bandwidth_limit_mbps is set, apply tc tbf (Token
+    # Bucket Filter) on the default network interface via apply_tc_bandwidth_limit().
+    # tc is removed on exit via atexit (registered inside apply_tc_bandwidth_limit).
+    #
+    # Concurrency env vars are still set for cosmetic reduction of parallelism:
+    #   hf-xet: HF_XET_NUM_CONCURRENT_RANGE_GETS / HF_XET_NUM_RANGE_IN_SEGMENT_*
+    #   standard HTTP: HF_HUB_DOWNLOAD_CONCURRENCY
     _yaml_concurrency = settings.get("hf_download_concurrency")
     max_concurrency: Optional[int] = (
         args.max_concurrency if args.max_concurrency is not None
@@ -1026,48 +1231,43 @@ def main() -> int:
         else (float(_yaml_bw) if _yaml_bw is not None else None)
     )
 
-    # If bandwidth_limit_mbps is set but max_concurrency is not explicitly configured,
-    # auto-derive a concurrency value as soft compensation.
-    # Rough heuristic: each Xet range-get uses ~25 Mbit/s → concurrency = bw_mbps / 25 (min 1).
+    # Hard bandwidth cap via tc ingress policing
+    if bandwidth_limit_mbps is not None:
+        _tc_ok = apply_tc_bandwidth_limit(bandwidth_limit_mbps)
+        if _tc_ok:
+            _iface = _tc_applied_iface or "?"
+            print(
+                f"[INFO] Bandwidth cap: {bandwidth_limit_mbps:.0f} Mbit/s "
+                f"(tc ingress police on {_iface} — HARD cap, removed on exit)"
+            )
+        else:
+            print(
+                f"[WARN] bandwidth_limit_mbps={bandwidth_limit_mbps:.0f} requested but tc failed "
+                f"(need sudo or root). Running unlimited. "
+                f"To enable: sudo visudo → add: {os.getenv('USER','user')} ALL=(ALL) NOPASSWD: /usr/sbin/tc"
+            )
+
+    # Concurrency env vars (reduce parallelism; not a bandwidth cap for hf-xet)
     _concurrency_auto_derived = False
     if bandwidth_limit_mbps is not None and max_concurrency is None:
         max_concurrency = max(1, int(bandwidth_limit_mbps / 25))
         _concurrency_auto_derived = True
-        print(
-            f"[WARN] bandwidth_limit_mbps={bandwidth_limit_mbps:.0f} is not a hard cap — "
-            f"setting concurrency={max_concurrency} as soft compensation "
-            f"(~{bandwidth_limit_mbps:.0f} Mbit/s ÷ 25 Mbit/connection). "
-            f"For a hard bandwidth cap use OS-level tc or wondershaper."
-        )
 
     if max_concurrency is not None:
-        # Set the correct env var for the active download backend
+        _src = "auto-derived from bandwidth_limit_mbps" if _concurrency_auto_derived else "config/CLI"
+        _conc_str = str(max_concurrency)
         if _active_backend == "xet":
-            os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] = str(max_concurrency)
-            # Also set the legacy var for safety (some hub versions may use it)
-            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = str(max_concurrency)
-            _src = "auto-derived from bandwidth_limit_mbps" if _concurrency_auto_derived else "config/CLI"
-            print(
-                f"[INFO] HF_XET_NUM_CONCURRENT_RANGE_GETS={max_concurrency} "
-                f"(limits Xet S3 range-get concurrency per file) [{_src}]"
-            )
+            # Only HF_XET_NUM_CONCURRENT_RANGE_GETS is a confirmed hf-xet env var
+            os.environ["HF_XET_NUM_CONCURRENT_RANGE_GETS"] = _conc_str
+            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = _conc_str
+            print(f"[INFO] Xet concurrency: HF_XET_NUM_CONCURRENT_RANGE_GETS={max_concurrency} [{_src}]")
         else:
-            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = str(max_concurrency)
-            _src = "auto-derived from bandwidth_limit_mbps" if _concurrency_auto_derived else "config/CLI"
-            print(
-                f"[INFO] HF_HUB_DOWNLOAD_CONCURRENCY={max_concurrency} "
-                f"(limits parallel chunk downloads) [{_src}]"
-            )
+            os.environ["HF_HUB_DOWNLOAD_CONCURRENCY"] = _conc_str
+            print(f"[INFO] HF_HUB_DOWNLOAD_CONCURRENCY={max_concurrency} [{_src}]")
     else:
         print("[INFO] Concurrency: not limited (using backend defaults)")
 
-    if bandwidth_limit_mbps is not None and not _concurrency_auto_derived:
-        print(
-            f"[INFO] Bandwidth limit: {bandwidth_limit_mbps:.1f} Mbit/s "
-            f"({bandwidth_limit_mbps / 8:.2f} MB/s) — soft cap via concurrency={max_concurrency}. "
-            f"For a hard cap use OS-level tc/wondershaper."
-        )
-    elif bandwidth_limit_mbps is None:
+    if bandwidth_limit_mbps is None:
         print("[INFO] Bandwidth limit: not set (unlimited)")
 
     # models_dir from settings can be overridden by S3-only mode (use temp dir)
@@ -1095,17 +1295,25 @@ def main() -> int:
         return 0
 
     mode_label = "DRY-RUN" if args.dry_run else "DOWNLOAD"
-    print(f"\n[{mode_label}] Processing {len(candidates)} model(s):\n")
+    _total = len(candidates)
+    print(f"\n[{mode_label}] Processing {_total} model(s):\n")
+
+    # Keep tqdm progress bars enabled — they will be parsed by model_browser.py
+    # to extract per-file download percentage from lines like "52%|..." or
+    # "[FILE_PROGRESS] 52". Carriage-return refresh lines are stripped in the worker.
+    # Do NOT set HF_HUB_DISABLE_PROGRESS_BARS here.
 
     results: list[DownloadResult] = []
 
     try:
-        for model in tqdm(candidates, desc="Models", unit="model", leave=True):
+        for _idx, model in enumerate(candidates, 1):
             repo_label = f"{model.repo_id}/{model.filename}"
-            tqdm.write(f"[{model.repo_id.split('/')[-1]}]")
+            # Structured progress marker parsed by model_browser.py
+            print(f"[PROGRESS] {_idx}/{_total}")
+            print(f"[{model.repo_id.split('/')[-1]}]")
 
             if model.gated and not hf_token:
-                tqdm.write(
+                print(
                     f"  [SKIP/GATED] {repo_label}\n"
                     f"  Set HF_TOKEN in credentials.yaml or .env and accept the license at:\n"
                     f"  https://huggingface.co/{model.repo_id}"
@@ -1132,8 +1340,8 @@ def main() -> int:
                     download_timeout=download_timeout_secs,
                 )
             except TimeoutError as te:
-                tqdm.write(f"\n[FATAL] {te}", file=sys.stderr)
-                tqdm.write(
+                print(f"\n[FATAL] {te}", file=sys.stderr)
+                print(
                     "[FATAL] Aborting all downloads to prevent bandwidth zombie.\n"
                     "        Fix the network issue, then restart the script.",
                     file=sys.stderr,
@@ -1141,13 +1349,13 @@ def main() -> int:
                 return 3
 
             if result.status == "SKIP":
-                tqdm.write(f"  [SKIP] Already current: {result.local_path}")
+                print(f"  [SKIP] Already current: {result.local_path}")
             elif result.status == "DOWNLOAD":
-                tqdm.write(f"  [OK]   Saved to: {result.local_path}  ({fmt_size(result.size_bytes)})")
+                print(f"  [OK]   Saved to: {result.local_path}  ({fmt_size(result.size_bytes)})")
             elif result.status == "DRYRUN":
-                tqdm.write(f"  [OK]   Repository valid: {model.repo_id}")
+                print(f"  [OK]   Repository valid: {model.repo_id}")
             elif result.status == "ERROR":
-                tqdm.write(f"  [ERR]  {result.error}")
+                print(f"  [ERR]  {result.error}")
 
             # S3 upload (if requested and download succeeded)
             if use_s3:

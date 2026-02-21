@@ -10,6 +10,8 @@
 6. [Обновление моделей](#6-обновление-моделей)
 7. [Работа в CI/CD](#7-работа-в-cicd)
 8. [Типовые сценарии](#8-типовые-сценарии)
+9. [Контроль нагрузки на канал](#9-контроль-нагрузки-на-канал)
+10. [Безопасность](#10-безопасность)
 
 ---
 
@@ -709,3 +711,136 @@ python scripts/browse_models.py \
   --author black-forest-labs \
   --file-regex "\.safetensors$"
 ```
+
+---
+
+## 9. Контроль нагрузки на канал
+
+HuggingFace использует **Xet-протокол** (Rust, content-addressed chunks): по умолчанию открывает до 49 параллельных TCP-соединений и может занять весь входящий канал (90+ Mbit/s). Для контроля используйте следующие механизмы.
+
+### Ограничение параллельных соединений (главный рычаг)
+
+```yaml
+# models.yaml
+settings:
+  hf_download_concurrency: 4    # 4 вместо ~50 → снижение нагрузки в 10–12 раз
+```
+
+Или через CLI (для разового запуска):
+
+```bash
+python scripts/download_models.py --max-concurrency 4
+python scripts/download_models.py --max-concurrency 1   # самый щадящий режим
+```
+
+### Таймаут на зависший download (защита от «призрака»)
+
+Если загрузка зависла и не завершается, скрипт завершится через заданное время:
+
+```yaml
+# models.yaml
+settings:
+  download_timeout_hours: 2     # убить процесс через 2 часа без результата
+```
+
+```bash
+python scripts/download_models.py --download-timeout 1.0   # таймаут 1 час
+python scripts/download_models.py --download-timeout 0     # без таймаута
+```
+
+При срабатывании таймаута скрипт выводит `[FATAL]` и завершается с кодом `3` — без молчаливого зависания.
+
+### PID-блокировка — один процесс за раз
+
+Одновременно может работать только один `download_models.py`. При попытке запустить второй:
+
+```
+[ERROR] Another download_models.py is already running (PID 13951).
+        If no process is running, delete: /path/to/.download.lock
+```
+
+Если процесс завис и блокировка не снялась:
+
+```bash
+rm .download.lock
+```
+
+### Ограничение на уровне ОС (для Xet и любых протоколов)
+
+```bash
+# установить wondershaper
+sudo apt install wondershaper
+
+# ограничить входящий канал до 20 Mbit/s (на интерфейсе enp1s0)
+sudo wondershaper enp1s0 20480 20480
+
+# снять ограничение
+sudo wondershaper clear enp1s0
+```
+
+### Запуск загрузки в нерабочее время
+
+```bash
+# загружать каждую ночь в 2:00
+# crontab -e
+0 2 * * * cd /path/to/aihub && make download
+```
+
+---
+
+## 10. Безопасность
+
+### Первоначальная настройка прав
+
+```bash
+cp credentials.yaml.example credentials.yaml
+chmod 600 credentials.yaml    # обязательно — только владелец может читать
+```
+
+### Проверка безопасности проекта
+
+```bash
+make security-check
+```
+
+Команда проверяет:
+- Права `credentials.yaml` (должны быть `600` или `400`)
+- Наличие секретных файлов в `.gitignore`
+- Отсутствие токенов HuggingFace в коде скриптов
+
+Пример успешного вывода:
+
+```
+[OK] credentials.yaml permissions: 600
+
+=== Проверка .gitignore ===
+[OK]   credentials.yaml в .gitignore
+[OK]   .env в .gitignore
+[OK]   .download.lock в .gitignore
+
+=== Поиск credentials в коде ===
+[OK]   HF tokens не найдены в коде
+
+Security check complete.
+```
+
+### Прокси с аутентификацией
+
+Пароли в `PROXY_URL` автоматически маскируются во всех логах:
+
+```
+# Что записывается в лог:
+[INFO] Proxy enabled: http://user:***@proxy.corp.com:3128
+
+# Исходное значение в credentials.yaml:
+url: "http://user:secret@proxy.corp.com:3128"
+```
+
+### Path Traversal защита (WebUI)
+
+Поле `dest_dir` проверяется на сервере — даже если клиентская валидация обойдена через `curl` или прямой API-запрос:
+- Допустимые символы: `a-z`, `0-9`, `-`, `_`, разделитель `/`
+- Максимум 3 уровня вложенности
+- Разрешённый диапазон: только внутри `models_dir`
+
+Попытка `../../../../etc/passwd` вернёт HTTP 400.

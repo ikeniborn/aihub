@@ -5,9 +5,9 @@ settings:
   retry_count: 3
   retry_delay: 5.0
   inter_download_delay: 60
-  bandwidth_limit_mbps: 50
-  hf_download_concurrency: 2
-  download_timeout_hours: 2
+  bandwidth_limit_mbps: 25.0
+  hf_download_concurrency: 1
+  download_timeout_hours: 2.0
   s3:
     sync_after_download: false
 models:
