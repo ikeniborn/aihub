@@ -2255,6 +2255,9 @@ def get_models_json(config_path: Path) -> list[dict]:
             "disk_size_str": fmt_size(disk_size_bytes) if downloaded else "-",
             "s3_synced": bool(item.get("s3_synced", False)),
             "s3_key": str(item.get("s3_key", "") or ""),
+            # s3_available: True only when both s3_synced flag and s3_key are set.
+            # Used by the delete modal to enable/disable S3 scope options.
+            "s3_available": bool(item.get("s3_synced", False)) and bool(item.get("s3_key", "")),
         })
 
     return result
