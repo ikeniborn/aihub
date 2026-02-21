@@ -14,7 +14,7 @@ models:
 - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF
   filename: DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
   dest_dir: llm/deepseek
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - llm
@@ -24,6 +24,8 @@ models:
   vram_gb: 10
   description: DeepSeek R1 Distill Qwen 14B Q4_K_M — reasoning model, MIT code / DeepSeek
     weights
+  s3_synced: true
+  s3_key: models/llm/deepseek/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
 - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF
   filename: DeepSeek-R1-Distill-Qwen-32B-Q4_K_M.gguf
   dest_dir: llm/deepseek
@@ -38,9 +40,9 @@ models:
   description: DeepSeek R1 Distill Qwen 32B Q4_K_M — near o1-mini quality, MIT code
     / DeepSeek weights
 - repo_id: bartowski/Phi-4-GGUF
-  filename: Phi-4-Q4_K_M.gguf
+  filename: phi-4-Q4_K_M.gguf
   dest_dir: llm/phi
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - llm
@@ -48,8 +50,9 @@ models:
   - code
   - 14b
   - mit
-  vram_gb: 8
   description: Phi-4 14B Q4_K_M — Microsoft, MIT license; strong reasoning and code
+  s3_synced: true
+  s3_key: models/llm/phi/phi-4-Q4_K_M.gguf
 - repo_id: IlyaGusev/saiga_llama3_8b_gguf
   filename: model-q4_k.gguf
   dest_dir: llm/russian
@@ -95,7 +98,7 @@ models:
 - repo_id: Qwen/Qwen2.5-Coder-32B-Instruct-GGUF
   filename: qwen2.5-coder-32b-instruct-q4_k_m.gguf
   dest_dir: llm/code
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - llm
@@ -104,31 +107,6 @@ models:
   - apache-2.0
   vram_gb: 20
   description: Qwen2.5-Coder 32B Q4_K_M — Alibaba, Apache 2.0; 92+ programming languages
-- repo_id: gpustack/bge-m3-GGUF
-  filename: bge-m3-Q8_0.gguf
-  dest_dir: embeddings
-  enabled: false
-  gated: false
-  tags:
-  - embeddings
-  - multilingual
-  - russian
-  - rag
-  - apache-2.0
-  vram_gb: 1
-  description: BGE-M3 Q8_0 — BAAI; 100+ languages, 8192 token context, dense+sparse+colbert
-- repo_id: nomic-ai/nomic-embed-text-v1.5-GGUF
-  filename: nomic-embed-text-v1.5.Q8_0.gguf
-  dest_dir: embeddings
-  enabled: false
-  gated: false
-  tags:
-  - embeddings
-  - english
-  - rag
-  - apache-2.0
-  vram_gb: 0
-  description: Nomic Embed Text v1.5 Q8_0 — Nomic AI, Apache 2.0; 137M params, Matryoshka
 - repo_id: black-forest-labs/FLUX.1-schnell
   filename: flux1-schnell.safetensors
   dest_dir: image_gen/flux
@@ -153,17 +131,6 @@ models:
   vram_gb: 8.0
   description: SDXL Base 1.0 — Stability AI, SDXL Community License (non-commercial
     restrictions apply)
-- repo_id: mradermacher/nomic-embed-code-i1-GGUF
-  filename: nomic-embed-code.i1-Q4_K_M.gguf
-  dest_dir: embeddings
-  enabled: false
-  gated: false
-  tags:
-  - embeddings
-  - code
-  - apache-2.0
-  vram_gb: 0.0
-  description: nomic-embed-code v1 GGUF i1-Q4_K_M — code embedding model (Nomic AI)
 - repo_id: unsloth/Qwen3-Coder-Next-GGUF
   filename: Qwen3-Coder-Next-Q4_K_M.gguf
   dest_dir: llm/code
@@ -175,19 +142,6 @@ models:
   - apache-2.0
   vram_gb: 45.0
   description: Qwen3-Coder-Next Q4_K_M — Unsloth/Qwen, Apache 2.0; next-gen code LLM
-- repo_id: bartowski/Mistral-Nemo-Instruct-2407-GGUF
-  filename: Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
-  dest_dir: llm/mistral
-  enabled: false
-  gated: false
-  tags:
-  - llm
-  - chat
-  - multilingual
-  - 12b
-  - apache-2.0
-  vram_gb: 7.7
-  description: Mistral NeMo 12B Instruct Q4_K_M — Mistral AI, Apache 2.0; multilingual
 - repo_id: MaziyarPanahi/Phi-3.5-mini-instruct-GGUF
   filename: Phi-3.5-mini-instruct.Q4_K_M.gguf
   dest_dir: llm/phi
@@ -201,3 +155,20 @@ models:
   vram_gb: 2.5
   description: Phi-3.5-mini 3.8B Q4_K_M — Microsoft, MIT; strong multilingual reasoning
     in a tiny footprint
+- repo_id: mradermacher/nomic-embed-code-i1-GGUF
+  filename: nomic-embed-code.i1-IQ1_M.gguf
+  dest_dir: embeddings
+  enabled: true
+  gated: false
+  tags:
+  - apache-2.0
+  vram_gb: 0.0
+  description: nomic-embed-code [apache-2.0]
+- repo_id: ggml-org/embeddinggemma-300m-qat-q8_0-GGUF
+  filename: embeddinggemma-300m-qat-Q8_0.gguf
+  dest_dir: embeddings
+  enabled: true
+  gated: false
+  tags:
+  - gemma
+  description: embeddinggemma-300m-qat-q8_0 [gemma]
