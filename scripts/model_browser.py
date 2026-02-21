@@ -227,6 +227,12 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border-radius: 3px; padding: 1px 6px; font-size: 0.65rem; font-weight: 700;
     margin-left: 4px; vertical-align: middle;
   }
+  .s3-badge {
+    display: inline-block; background: #0a2640; color: #38bdf8;
+    border: 1px solid #0369a1; border-radius: 3px; padding: 1px 5px;
+    font-size: 0.6rem; font-weight: 700; margin-left: 4px; vertical-align: middle;
+    letter-spacing: 0.04em; cursor: default;
+  }
   .enabled-cb { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
   #empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; }
   .btn-delete {
@@ -903,10 +909,18 @@ function renderModelRow(m, i) {
   tdCb.appendChild(cb);
 
   const tdStatus = document.createElement('td');
+  tdStatus.style.whiteSpace = 'nowrap';
   const dot = document.createElement('span');
   dot.className = 'status-dot ' + (m.downloaded ? 'dot-downloaded' : 'dot-notfound');
   dot.title = m.downloaded ? 'Скачана' : 'Не скачана';
   tdStatus.appendChild(dot);
+  if (m.s3_synced) {
+    const s3b = document.createElement('span');
+    s3b.className = 's3-badge';
+    s3b.textContent = 'S3';
+    s3b.title = m.s3_key ? `Синхронизировано в S3:\n${m.s3_key}` : 'Синхронизировано в S3';
+    tdStatus.appendChild(s3b);
+  }
 
   const tdName = document.createElement('td');
   tdName.innerHTML =
@@ -2040,6 +2054,8 @@ def get_models_json(config_path: Path) -> list[dict]:
             "downloaded": downloaded,
             "disk_size_bytes": disk_size_bytes,
             "disk_size_str": fmt_size(disk_size_bytes) if downloaded else "-",
+            "s3_synced": bool(item.get("s3_synced", False)),
+            "s3_key": str(item.get("s3_key", "") or ""),
         })
 
     return result

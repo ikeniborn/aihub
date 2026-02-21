@@ -808,6 +808,44 @@ def download_model(
         _monitor_stop.set()
 
 
+# ─── YAML Write Helper ────────────────────────────────────────────────────────
+
+
+def _atomic_yaml_write(config_path: Path, data: dict) -> None:
+    """Atomic YAML write via tempfile + os.replace (same pattern as model_browser)."""
+    fd, tmp = tempfile.mkstemp(dir=str(config_path.parent), suffix=".yaml.tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, str(config_path))
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def mark_model_s3_synced(config_path: Path, model: "ModelEntry", s3_key: str) -> None:
+    """
+    Persist s3_synced=true and s3_key into the model's entry in models.yaml.
+
+    s3_key is stored so that if dest_dir changes later, the old S3 path is known
+    and the object can be renamed (copy + delete) instead of re-uploaded.
+    """
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+        for item in raw.get("models", []):
+            if item.get("repo_id") == model.repo_id and item.get("filename") == model.filename:
+                item["s3_synced"] = True
+                item["s3_key"] = s3_key
+                break
+        _atomic_yaml_write(config_path, raw)
+    except Exception as e:
+        print(f"  [WARN] Could not update s3_synced in yaml: {e}")
+
+
 # ─── S3 Sync ──────────────────────────────────────────────────────────────────
 
 
@@ -1395,6 +1433,10 @@ def main() -> int:
                     force=args.force,
                     dry_run=args.dry_run,
                 )
+                # Persist s3_synced flag + s3_key into models.yaml so the UI can
+                # show the S3 badge and future dest_dir moves can rename the object.
+                if result.s3_status in ("UPLOADED", "SKIP") and not args.dry_run:
+                    mark_model_s3_synced(config_path, model, _s3_key(model, s3_cfg.prefix))
 
             # S3-only mode: remove local file after successful upload
             if args.s3_only and result.s3_status == "UPLOADED" and result.local_path:

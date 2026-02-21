@@ -134,6 +134,8 @@ models:
   - 14b
   vram_gb: 9
   description: Qwen2.5-Coder 14B Q4_K_M — Alibaba, Apache 2.0; excellent code generation
+  s3_synced: true
+  s3_key: models/llm/code/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
 - repo_id: gpustack/bge-m3-GGUF
   filename: bge-m3-Q8_0.gguf
   dest_dir: embeddings
