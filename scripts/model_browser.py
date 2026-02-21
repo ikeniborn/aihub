@@ -461,6 +461,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .dl-save-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--bg-surface); }
   .dl-save-btn.saved  { border-color: var(--green); color: var(--green); }
   .dl-save-btn.error  { border-color: var(--red);   color: var(--red); }
+  .dl-ctrl-checkbox { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 
   /* ── Download Panel ── */
   .download-panel {
@@ -561,6 +562,10 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <div class="dl-ctrl-group">
         <span class="dl-ctrl-label" title="Жёсткий лимит скорости загрузки через tc ingress policing.&#10;Применяется на сетевом интерфейсе — ограничивает входящий трафик.&#10;Снимается автоматически при завершении. 0 или пусто = без лимита.">Лимит Mbit/s:</span>
         <input type="number" id="dl-bandwidth" class="dl-ctrl-input" value="" min="0" max="10000" step="5" placeholder="∞">
+      </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Автоматически загружать модели в S3 после скачивания.&#10;Требует настройки credentials.yaml (access_key_id, secret_access_key)&#10;и переменных окружения: S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, S3_PREFIX.">Sync → S3:</span>
+        <input type="checkbox" id="dl-sync-s3" class="dl-ctrl-checkbox">
       </div>
       <button class="dl-save-btn" id="dl-save-btn" onclick="saveSettings()" title="Сохранить параметры в models.yaml">Сохранить настройки</button>
       <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели">▶ Скачать enabled</button>
@@ -1819,6 +1824,7 @@ async function dlStart() {
   const timeout = (!isNaN(_toRaw) && _toRaw >= 0) ? _toRaw : 2;
   const _bwRaw  = parseFloat(document.getElementById('dl-bandwidth').value);
   const bandwidth = (!isNaN(_bwRaw) && _bwRaw > 0) ? _bwRaw : null;
+  const syncS3 = document.getElementById('dl-sync-s3').checked;
 
   startBtn.disabled = true;
   statusMsg.style.display = 'none';
@@ -1826,7 +1832,7 @@ async function dlStart() {
     const resp = await fetch('/api/download/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ max_concurrency: concurrency, download_timeout: timeout, bandwidth_limit: bandwidth }),
+      body: JSON.stringify({ max_concurrency: concurrency, download_timeout: timeout, bandwidth_limit: bandwidth, sync_s3: syncS3 }),
     });
     const data = await resp.json();
     if (!resp.ok) {
@@ -1925,6 +1931,8 @@ async function loadSettings() {
       document.getElementById('dl-timeout').value = s.download_timeout_hours;
     if (s.bandwidth_limit_mbps != null)
       document.getElementById('dl-bandwidth').value = s.bandwidth_limit_mbps;
+    if (s.sync_after_download != null)
+      document.getElementById('dl-sync-s3').checked = s.sync_after_download;
   } catch (_) {}
 }
 
@@ -1935,12 +1943,14 @@ async function saveSettings() {
   const concRaw = parseInt(document.getElementById('dl-concurrency').value, 10);
   const toRaw   = parseFloat(document.getElementById('dl-timeout').value);
   const bwRaw   = parseFloat(document.getElementById('dl-bandwidth').value);
+  const syncS3  = document.getElementById('dl-sync-s3').checked;
 
   // null means "remove from yaml" (no limit); 0 for timeout means disabled
   const body = {
     hf_download_concurrency: (concRaw > 0)                    ? concRaw : null,
     download_timeout_hours:  (!isNaN(toRaw) && toRaw >= 0)    ? toRaw   : null,
     bandwidth_limit_mbps:    (!isNaN(bwRaw) && bwRaw > 0)     ? bwRaw   : null,
+    sync_after_download:     syncS3,
   };
 
   try {
@@ -2502,6 +2512,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     "hf_download_concurrency": s.get("hf_download_concurrency"),
                     "bandwidth_limit_mbps":    s.get("bandwidth_limit_mbps"),
                     "download_timeout_hours":  s.get("download_timeout_hours"),
+                    "sync_after_download":     s.get("s3", {}).get("sync_after_download"),
                 })
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
@@ -2610,6 +2621,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     bandwidth_limit_mbps = None
             except (ValueError, TypeError):
                 bandwidth_limit_mbps = None
+            sync_s3: bool = bool(params.get("sync_s3", False))
 
             with _dl_lock:
                 if download_state["running"]:
@@ -2634,7 +2646,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             # Start background download thread with throttle params from UI
             t = threading.Thread(
                 target=_download_worker,
-                args=(self.config_path, max_concurrency, download_timeout, bandwidth_limit_mbps),
+                args=(self.config_path, max_concurrency, download_timeout, bandwidth_limit_mbps, sync_s3),
                 daemon=True,
             )
             t.start()
@@ -2670,6 +2682,10 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                         s.pop("download_timeout_hours", None)
                     else:
                         s["download_timeout_hours"] = float(v)
+                # sync_after_download: bool — сохраняется в settings.s3.sync_after_download
+                if "sync_after_download" in params:
+                    s3_sec = s.setdefault("s3", {})
+                    s3_sec["sync_after_download"] = bool(params["sync_after_download"])
                 _atomic_yaml_write(self.config_path, raw)
                 self._send_json({"status": "ok"})
             except (ValueError, TypeError) as e:
@@ -2733,6 +2749,7 @@ def _download_worker(
     max_concurrency: Optional[int] = None,
     download_timeout: Optional[float] = None,
     bandwidth_limit_mbps: Optional[float] = None,
+    sync_s3: bool = False,
 ) -> None:
     """
     Background thread that runs download_models.py as a subprocess.
@@ -2747,6 +2764,7 @@ def _download_worker(
         max_concurrency:    --max-concurrency N  (HuggingFace Xet / HTTP parallel connections)
         download_timeout:   --download-timeout H (per-file timeout in hours, 0=unlimited)
         bandwidth_limit_mbps: --bandwidth-limit M (soft cap via concurrency compensation, Mbit/s)
+        sync_s3:            --upload-s3  (upload downloaded models to S3 after download)
     """
     script = Path(__file__).parent / "download_models.py"
     cmd = [
@@ -2759,6 +2777,8 @@ def _download_worker(
         cmd += ["--download-timeout", str(float(download_timeout))]
     if bandwidth_limit_mbps is not None:
         cmd += ["--bandwidth-limit", str(float(bandwidth_limit_mbps))]
+    if sync_s3:
+        cmd += ["--upload-s3"]
 
     try:
         proc = subprocess.Popen(

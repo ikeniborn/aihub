@@ -5,11 +5,11 @@ settings:
   retry_count: 3
   retry_delay: 5.0
   inter_download_delay: 60
-  bandwidth_limit_mbps: 50.0
+  bandwidth_limit_mbps: 75.0
   hf_download_concurrency: 1
   download_timeout_hours: 2.0
   s3:
-    sync_after_download: false
+    sync_after_download: true
 models:
 - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
   filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
@@ -126,7 +126,7 @@ models:
 - repo_id: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
   filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
   dest_dir: llm/code
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - llm
@@ -137,7 +137,7 @@ models:
 - repo_id: gpustack/bge-m3-GGUF
   filename: bge-m3-Q8_0.gguf
   dest_dir: embeddings
-  enabled: true
+  enabled: false
   gated: false
   tags:
   - embeddings
@@ -149,7 +149,7 @@ models:
 - repo_id: nomic-ai/nomic-embed-text-v1.5-GGUF
   filename: nomic-embed-text-v1.5.Q8_0.gguf
   dest_dir: embeddings
-  enabled: true
+  enabled: false
   gated: false
   tags:
   - embeddings
@@ -161,28 +161,28 @@ models:
   filename: flux1-schnell.safetensors
   dest_dir: image_gen/flux
   enabled: false
-  gated: false
+  gated: true
   tags:
   - image_gen
   - flux
   - apache2
-  vram_gb: 8
+  vram_gb: 8.0
   description: FLUX.1 schnell — Black Forest Labs, Apache 2.0; 1-4 steps, commercial
     use OK
 - repo_id: stabilityai/stable-diffusion-xl-base-1.0
   filename: sd_xl_base_1.0.safetensors
   dest_dir: image_gen/sdxl
   enabled: false
-  gated: false
+  gated: true
   tags:
   - image_gen
   - sdxl
-  vram_gb: 8
+  vram_gb: 8.0
   description: SDXL Base 1.0 — Stability AI, SDXL Community License
 - repo_id: mradermacher/nomic-embed-code-i1-GGUF
   filename: nomic-embed-code.i1-Q4_K_M.gguf
   dest_dir: embeddings
-  enabled: true
+  enabled: false
   gated: false
   tags:
   - embeddings
@@ -212,3 +212,11 @@ models:
   - apache-2.0
   vram_gb: 7.7
   description: Mistral NeMo 12B Instruct Q4_K_M — Mistral AI, Apache 2.0; multilingual
+- repo_id: MaziyarPanahi/Phi-3.5-mini-instruct-GGUF
+  filename: Phi-3.5-mini-instruct.Q4_K_M.gguf
+  dest_dir: text/phi
+  enabled: false
+  gated: false
+  tags: []
+  vram_gb: 0.0
+  description: Phi-3.5-mini-instruct
