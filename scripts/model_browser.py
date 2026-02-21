@@ -289,7 +289,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
     background: #243050; border-radius: 3px; padding: 2px 7px;
     font-size: 0.7rem; color: #a8c0e0; white-space: nowrap;
   }
-  .vram { font-size: 0.78rem; color: var(--text-muted); white-space: nowrap; }
   .desc { color: var(--text-muted); font-size: 0.78rem; max-width: 260px; }
   .gated-badge {
     display: inline-block; background: #744210; color: var(--yellow);
@@ -381,7 +380,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .model-edit-input:focus { border-color: var(--accent); }
   .model-edit-input.w-tags  { width: 200px; }
-  .model-edit-input.w-vram  { width: 70px; }
   .model-edit-input.w-desc  { width: 260px; }
   .model-edit-input.w-dir   { width: 150px; }
   .dir-move-note { font-size: 0.68rem; color: var(--yellow); margin-top: 2px; }
@@ -544,7 +542,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .hf-add-table .cell-add-model .add-fname { font-size: 0.7rem; color: var(--text-muted); }
   .col-add-dir  { width: 130px; }
   .col-add-tags { width: 170px; }
-  .col-add-vram { width: 70px; }
   .col-add-desc { min-width: 200px; }
   .hf-add-input {
     width: 100%; box-sizing: border-box;
@@ -842,7 +839,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
                 <th>Модель / Файл</th>
                 <th class="col-add-dir">Папка (dest_dir)</th>
                 <th class="col-add-tags">Теги</th>
-                <th class="col-add-vram">VRAM GB</th>
                 <th class="col-add-desc">Описание</th>
               </tr>
             </thead>
@@ -1208,8 +1204,6 @@ function modelEditToggle(m, mainTr, btn) {
 
   // Tags
   form.appendChild(_editField('Теги (через пробел)', 'tags', 'text', (m.tags || []).join(' '), 'w-tags'));
-  // VRAM
-  form.appendChild(_editField('VRAM (GB)', 'vram', 'number', m.vram_gb || 0, 'w-vram'));
   // Description
   form.appendChild(_editField('Описание', 'desc', 'text', m.description || '', 'w-desc'));
   // dest_dir
@@ -1274,7 +1268,6 @@ async function modelEditSave(m, editTr, mainTr, btn) {
   editTr.querySelectorAll('input[data-field]').forEach(inp => {
     const f = inp.dataset.field;
     if (f === 'tags')  update.tags = inp.value.trim() ? inp.value.trim().split(/\s+/) : [];
-    if (f === 'vram')  update.vram_gb = parseFloat(inp.value) || 0;
     if (f === 'desc')  update.description = inp.value.trim();
     if (f === 'dir')   update.dest_dir = inp.value.trim() || 'misc';
     if (f === 'gated') update.gated = inp.checked;
@@ -1748,23 +1741,6 @@ function applyDirValidation(input, hintEl) {
   return !err;
 }
 
-function estimateVram(fname, repoId) {
-  // Estimate VRAM (GB) from filename + model size string
-  const hay = ((fname || '') + '-' + (repoId || '')).toUpperCase();
-  const sizeM = hay.match(/[-_](\d+(?:\.\d+)?)[B](?:[-_A-Z]|$)/);
-  if (!sizeM) return 0;
-  const pb = parseFloat(sizeM[1]);
-  const quantMap = [
-    ['Q2_K', 3.0], ['Q3_K_S', 3.5], ['Q3_K_M', 3.5], ['Q3_K_L', 4.0],
-    ['Q4_0', 4.0], ['IQ4_XS', 4.0], ['Q4_K_S', 4.0], ['Q4_K_M', 4.5], ['Q4_K', 4.5],
-    ['Q5_0', 5.0], ['Q5_K_S', 5.0], ['Q5_K_M', 5.5], ['Q5_K', 5.5],
-    ['Q6_K', 6.5], ['Q8_0', 8.0], ['F16', 16.0], ['BF16', 16.0],
-  ];
-  let bpw = 4.5;
-  for (const [q, b] of quantMap) { if (hay.includes(q)) { bpw = b; break; } }
-  return Math.max(1, Math.round(pb * bpw / 8 + 0.5));
-}
-
 function suggestDestDir(repoId, pipelineTag, tags) {
   // Auto-suggest dest_dir from model type, name, language
   const lower = (repoId || '').toLowerCase();
@@ -1816,7 +1792,6 @@ function hfShowAddForm() {
   for (const [key, item] of hfSelected.entries()) {
     const autoDir  = suggestDestDir(item.repo_id, item.pipeline_tag, item.tags || []);
     const autoTags = (item.tags || []).join(' ');
-    const autoVram = estimateVram(item.filename, item.repo_id);
     const autoDesc = item.description || '';
 
     const tr = document.createElement('tr');
@@ -1845,20 +1820,13 @@ function hfShowAddForm() {
     inTags.className = 'hf-add-input add-tags'; inTags.value = autoTags; inTags.placeholder = 'llm chat 8b';
     tdTags.appendChild(inTags);
 
-    // vram
-    const tdVram = document.createElement('td');
-    const inVram = document.createElement('input');
-    inVram.type = 'number'; inVram.className = 'hf-add-input add-vram';
-    inVram.value = autoVram; inVram.min = '0'; inVram.step = '1';
-    tdVram.appendChild(inVram);
-
     // description
     const tdDesc = document.createElement('td');
     const inDesc = document.createElement('input');
     inDesc.className = 'hf-add-input add-description'; inDesc.value = autoDesc; inDesc.placeholder = 'описание';
     tdDesc.appendChild(inDesc);
 
-    tr.append(tdM, tdDir, tdTags, tdVram, tdDesc);
+    tr.append(tdM, tdDir, tdTags, tdDesc);
     tbody.appendChild(tr);
   }
 
@@ -1887,7 +1855,6 @@ async function hfConfirmAdd() {
       enabled, gated: item.gated,
       dest_dir:    tr.querySelector('.add-dest-dir').value.trim() || 'misc',
       tags:        tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [],
-      vram_gb:     parseFloat(tr.querySelector('.add-vram').value) || 0,
       description: tr.querySelector('.add-description').value.trim(),
     });
   }
@@ -2252,7 +2219,6 @@ def get_models_json(config_path: Path) -> list[dict]:
             "enabled": bool(item.get("enabled", True)),
             "gated": bool(item.get("gated", False)),
             "tags": list(item.get("tags", []) or []),
-            "vram_gb": float(item.get("vram_gb", 0) or 0),
             "description": str(item.get("description", "") or ""),
             "downloaded": downloaded,
             "disk_size_bytes": disk_size_bytes,
@@ -2308,7 +2274,7 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
     Atomically update model entries in models.yaml.
 
     Each update dict must contain repo_id + filename as identifiers and may
-    contain any combination of: enabled, tags, vram_gb, description, gated, dest_dir.
+    contain any combination of: enabled, tags, description, gated, dest_dir.
 
     If dest_dir changes and the model file exists at the old path, it is moved
     to the new path (parent dirs created automatically).
@@ -2350,11 +2316,6 @@ def save_models(config_path: Path, updates: list[dict]) -> None:
             item["enabled"] = bool(u["enabled"])
         if "gated" in u:
             item["gated"] = bool(u["gated"])
-        if "vram_gb" in u:
-            try:
-                item["vram_gb"] = float(u["vram_gb"])
-            except (ValueError, TypeError):
-                pass
         if "description" in u:
             item["description"] = str(u.get("description") or "")
         if "tags" in u:
@@ -2572,12 +2533,6 @@ def add_models_to_yaml(
             skipped.append(f"{repo_id}::{filename}")
             continue
 
-        # Безопасное приведение типов
-        try:
-            vram = float(item.get("vram_gb", 0) or 0)
-        except (ValueError, TypeError):
-            vram = 0.0
-
         raw_tags = item.get("tags", []) or []
         if isinstance(raw_tags, list):
             tags = [str(t) for t in raw_tags if t]
@@ -2591,7 +2546,6 @@ def add_models_to_yaml(
             "enabled": bool(item.get("enabled", False)),
             "gated": bool(item.get("gated", False)),
             "tags": tags,
-            "vram_gb": vram,
             "description": str(item.get("description", "") or ""),
         }
 
