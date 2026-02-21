@@ -5,7 +5,7 @@ settings:
   retry_count: 3
   retry_delay: 5.0
   inter_download_delay: 60
-  bandwidth_limit_mbps: 25.0
+  bandwidth_limit_mbps: 50.0
   hf_download_concurrency: 1
   download_timeout_hours: 2.0
   s3:
@@ -137,7 +137,7 @@ models:
 - repo_id: gpustack/bge-m3-GGUF
   filename: bge-m3-Q8_0.gguf
   dest_dir: embeddings
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - embeddings
@@ -149,7 +149,7 @@ models:
 - repo_id: nomic-ai/nomic-embed-text-v1.5-GGUF
   filename: nomic-embed-text-v1.5.Q8_0.gguf
   dest_dir: embeddings
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - embeddings
@@ -182,7 +182,7 @@ models:
 - repo_id: mradermacher/nomic-embed-code-i1-GGUF
   filename: nomic-embed-code.i1-Q4_K_M.gguf
   dest_dir: embeddings
-  enabled: false
+  enabled: true
   gated: false
   tags:
   - embeddings
@@ -202,7 +202,7 @@ models:
 - repo_id: bartowski/Mistral-Nemo-Instruct-2407-GGUF
   filename: Mistral-Nemo-Instruct-2407-Q4_K_M.gguf
   dest_dir: llm/mistral
-  enabled: true
+  enabled: false
   gated: false
   tags:
   - llm
