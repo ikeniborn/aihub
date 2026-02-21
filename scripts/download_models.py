@@ -907,6 +907,19 @@ def relocate_model_if_moved(
     local_ok = False
     if new_local.is_file():
         print(f"  [RELOCATE-LOCAL] Already at new path: {new_local}")
+        # Remove stale duplicate at old path to avoid wasted disk space
+        if old_local != new_local and old_local.is_file():
+            try:
+                old_local.unlink()
+                print(f"  [RELOCATE-LOCAL] Removed stale old file: {old_local}")
+            except Exception as e:
+                print(f"  [WARN] relocate: cannot remove old file: {e}")
+            old_etag = _etag_path(old_local)
+            if old_etag.is_file():
+                try:
+                    old_etag.unlink()
+                except Exception:
+                    pass
         local_ok = True
     elif old_local.is_file():
         try:
@@ -924,6 +937,31 @@ def relocate_model_if_moved(
             print(f"  [WARN] relocate: local move failed: {e}")
     else:
         print(f"  [WARN] relocate: old local file not found at {old_local}, skipping local move")
+
+    # ── 1b. Move HF cache dir (needed for resumable downloads) ────────────────
+    old_cache = models_root / old_dest_dir / ".cache"
+    new_cache = new_local.parent / ".cache"
+    if old_cache.is_dir() and old_cache.resolve() != new_cache.resolve():
+        if new_cache.exists():
+            print(f"  [RELOCATE-LOCAL] Cache already exists at new path, skipping cache move")
+        else:
+            try:
+                new_cache.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_cache), str(new_cache))
+                print(f"  [RELOCATE-LOCAL] Moved cache dir:\n"
+                      f"    {old_cache}\n"
+                      f"  → {new_cache}")
+            except Exception as e:
+                print(f"  [WARN] relocate: cache dir move failed: {e}")
+
+    # ── 1c. Remove old directory if now empty ─────────────────────────────────
+    old_dir = old_local.parent
+    if old_dir.is_dir() and old_dir.resolve() != new_local.parent.resolve():
+        try:
+            old_dir.rmdir()  # Succeeds only when empty; OSError otherwise
+            print(f"  [RELOCATE-LOCAL] Removed empty old dir: {old_dir}")
+        except OSError:
+            pass  # Directory not empty — leave it
 
     # ── 2. Rename S3 object (copy + delete) ──────────────────────────────────
     s3_ok = False
@@ -1517,7 +1555,7 @@ def main() -> int:
                     config_path=config_path,
                     model=model,
                     models_root=models_root,
-                    s3_cfg=s3_cfg if use_s3 else None,
+                    s3_cfg=s3_cfg,
                 )
 
             try:

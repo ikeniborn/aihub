@@ -22,6 +22,7 @@ models:
   - multilingual
   - russian
   - 14b
+  - apache-2.0
   vram_gb: 9
   description: Qwen 2.5 14B Instruct Q4_K_M — Alibaba, Apache 2.0
 - repo_id: bartowski/Qwen2.5-32B-Instruct-GGUF
@@ -35,6 +36,7 @@ models:
   - multilingual
   - russian
   - 32b
+  - apache-2.0
   vram_gb: 20
   description: Qwen 2.5 32B Instruct Q4_K_M — Alibaba, Apache 2.0
 - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF
@@ -71,6 +73,7 @@ models:
   - reasoning
   - code
   - 14b
+  - mit
   vram_gb: 8
   description: Phi-4 14B Q4_K_M — Microsoft, MIT license; strong reasoning and code
 - repo_id: IlyaGusev/saiga_llama3_8b_gguf
@@ -83,6 +86,7 @@ models:
   - chat
   - russian
   - 8b
+  - apache-2.0
   vram_gb: 5
   description: Saiga Llama3 8B Q4_K — IlyaGusev, Apache 2.0; popular Russian-language
     assistant
@@ -96,6 +100,7 @@ models:
   - chat
   - russian
   - 7b
+  - apache-2.0
   vram_gb: 5
   description: 'T-Lite 7B Q4_K_M — T-Bank (Tinkoff), Apache 2.0; #1 open Russian model
     on MERA'
@@ -110,6 +115,7 @@ models:
   - russian
   - moe
   - 10b
+  - mit
   vram_gb: 4
   description: GigaChat3 10B MoE (1.8B active) — Sber, MIT; speed of 3-4B dense model
 - repo_id: Qwen/Qwen2.5-Coder-32B-Instruct-GGUF
@@ -121,6 +127,7 @@ models:
   - llm
   - code
   - 32b
+  - apache-2.0
   vram_gb: 20
   description: Qwen2.5-Coder 32B Q4_K_M — Alibaba, Apache 2.0; 92+ programming languages
 - repo_id: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
@@ -132,7 +139,8 @@ models:
   - llm
   - code
   - 14b
-  vram_gb: 9
+  - apache-2.0
+  vram_gb: 9.0
   description: Qwen2.5-Coder 14B Q4_K_M — Alibaba, Apache 2.0; excellent code generation
   s3_synced: true
   s3_key: models/llm/code/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
@@ -157,6 +165,7 @@ models:
   - embeddings
   - english
   - rag
+  - apache-2.0
   vram_gb: 0
   description: Nomic Embed Text v1.5 Q8_0 — Nomic AI, Apache 2.0; 137M params, Matryoshka
 - repo_id: black-forest-labs/FLUX.1-schnell
@@ -167,7 +176,7 @@ models:
   tags:
   - image_gen
   - flux
-  - apache2
+  - apache-2.0
   vram_gb: 8.0
   description: FLUX.1 schnell — Black Forest Labs, Apache 2.0; 1-4 steps, commercial
     use OK
@@ -188,6 +197,7 @@ models:
   gated: false
   tags:
   - embeddings
+  - apache-2.0
   vram_gb: 0.0
   description: nomic-embed-code v1 GGUF i1-Q4_K_M — code embedding model (Nomic AI)
 - repo_id: unsloth/Qwen3-Coder-Next-GGUF
@@ -216,9 +226,14 @@ models:
   description: Mistral NeMo 12B Instruct Q4_K_M — Mistral AI, Apache 2.0; multilingual
 - repo_id: MaziyarPanahi/Phi-3.5-mini-instruct-GGUF
   filename: Phi-3.5-mini-instruct.Q4_K_M.gguf
-  dest_dir: text/phi
+  dest_dir: llm/phi
   enabled: false
   gated: false
-  tags: []
-  vram_gb: 0.0
-  description: Phi-3.5-mini-instruct
+  tags:
+  - llm
+  - chat
+  - 3.8b
+  - mit
+  vram_gb: 2.5
+  description: Phi-3.5-mini 3.8B Q4_K_M — Microsoft, MIT; strong multilingual reasoning
+    in a tiny footprint
