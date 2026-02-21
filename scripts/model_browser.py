@@ -45,6 +45,7 @@ from typing import Any, Optional, TypedDict
 from urllib.parse import urlparse, parse_qs
 
 import yaml
+from dotenv import load_dotenv
 
 # Shared utilities
 sys.path.insert(0, str(Path(__file__).parent))
@@ -2655,10 +2656,11 @@ def s3_delete_model(
         return {"removed_s3": False, "s3_key": key, "error": str(exc)}
 
 
-def _clear_s3_metadata(config_path: Path, repo_id: str, filename: str) -> None:
+def _clear_s3_metadata(config_path: Path, repo_id: str, filename: str) -> bool:
     """
     Атомарно очищает s3_synced и s3_key в yaml после удаления из S3.
     Вызывается для scope='s3_only' и scope='everywhere'.
+    Возвращает True при успехе, False при ошибке записи yaml.
     """
     try:
         raw = load_yaml(config_path)
@@ -2670,8 +2672,10 @@ def _clear_s3_metadata(config_path: Path, repo_id: str, filename: str) -> None:
                 item.pop("s3_key", None)
                 break
         _atomic_yaml_write(config_path, raw)
+        return True
     except Exception as e:
         print(f"  [WARN] _clear_s3_metadata: не удалось обновить yaml: {e}", file=sys.stderr)
+        return False
 
 
 def delete_model(
@@ -2762,7 +2766,9 @@ def delete_model(
 
         # Clear s3_synced + s3_key in yaml regardless of actual delete result
         # (if object is gone, metadata should reflect that)
-        _clear_s3_metadata(config_path, repo_id, filename)
+        metadata_cleared = _clear_s3_metadata(config_path, repo_id, filename)
+        if not metadata_cleared and s3_error is None:
+            s3_error = "S3 объект удалён, но yaml-метаданные не обновлены (ошибка записи)"
         # Reload raw after _clear_s3_metadata wrote it
         raw = load_yaml(config_path)
         models_list = raw.get("models", []) or []
@@ -3315,6 +3321,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Load .env before reading any S3/HF config from environment variables
+    load_dotenv(dotenv_path=".env", override=False)
+
     args = build_parser().parse_args()
     config_path = Path(args.config)
 

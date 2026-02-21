@@ -48,6 +48,7 @@ models:
   - llm
   - reasoning
   - 14b
+  - mit
   vram_gb: 10
   description: DeepSeek R1 Distill Qwen 14B Q4_K_M — reasoning model, MIT code / DeepSeek
     weights
@@ -60,6 +61,7 @@ models:
   - llm
   - reasoning
   - 32b
+  - mit
   vram_gb: 20
   description: DeepSeek R1 Distill Qwen 32B Q4_K_M — near o1-mini quality, MIT code
     / DeepSeek weights
@@ -154,6 +156,7 @@ models:
   - multilingual
   - russian
   - rag
+  - apache-2.0
   vram_gb: 1
   description: BGE-M3 Q8_0 — BAAI; 100+ languages, 8192 token context, dense+sparse+colbert
 - repo_id: nomic-ai/nomic-embed-text-v1.5-GGUF
@@ -188,8 +191,10 @@ models:
   tags:
   - image_gen
   - sdxl
+  - sdxl-license
   vram_gb: 8.0
-  description: SDXL Base 1.0 — Stability AI, SDXL Community License
+  description: SDXL Base 1.0 — Stability AI, SDXL Community License (non-commercial
+    restrictions apply)
 - repo_id: mradermacher/nomic-embed-code-i1-GGUF
   filename: nomic-embed-code.i1-Q4_K_M.gguf
   dest_dir: embeddings
@@ -197,6 +202,7 @@ models:
   gated: false
   tags:
   - embeddings
+  - code
   - apache-2.0
   vram_gb: 0.0
   description: nomic-embed-code v1 GGUF i1-Q4_K_M — code embedding model (Nomic AI)
