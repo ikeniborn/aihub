@@ -199,17 +199,20 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .tab-panel.active { display: block; }
 
   /* ── Controls bar (tab: Мои модели) ── */
-  .controls-bar { background: var(--bg-surface); border-bottom: 1px solid var(--border);
-                  padding: 8px 24px; display: flex; align-items: center;
-                  gap: 10px; flex-wrap: wrap; }
+  .search-bar { background: var(--bg-surface); border-bottom: 1px solid var(--border);
+                padding: 8px 24px; display: flex; align-items: center;
+                gap: 10px; flex-wrap: wrap; }
+  .actions-bar { background: var(--bg-surface); border-bottom: 1px solid var(--border);
+                 padding: 6px 24px; display: flex; align-items: center; gap: 14px;
+                 flex-wrap: wrap; }
   .dl-bar { background: var(--bg-elevated); border-bottom: 1px solid var(--border);
             padding: 7px 24px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .controls-bar input[type=text] {
+  .search-bar input[type=text] {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-primary); padding: 6px 12px; font-size: 0.875rem; width: 220px;
     outline: none; transition: border-color 0.15s;
   }
-  .controls-bar input[type=text]:focus { border-color: var(--accent); }
+  .search-bar input[type=text]:focus { border-color: var(--accent); }
 
   /* ── Tag filter ── */
   .tag-filter { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
@@ -649,10 +652,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <!-- ═══════════════════════ TAB: Мои модели ═══════════════════════ -->
 <div id="tab-my-models" class="tab-panel active">
-  <!-- Блок 1: Фильтры и управление списком -->
-  <div class="controls-bar">
+  <!-- Блок 1: Поиск и теги -->
+  <div class="search-bar">
     <input type="text" id="search" placeholder="Поиск по модели, описанию..." oninput="applyFilters()">
     <div class="tag-filter" id="tag-filter"></div>
+  </div>
+  <!-- Блок 2: Галки и кнопка сохранения -->
+  <div class="actions-bar">
     <label class="toggle-label">
       <input type="checkbox" id="only-enabled" onchange="applyFilters()">
       только enabled
