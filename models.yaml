@@ -11,34 +11,6 @@ settings:
   s3:
     sync_after_download: true
 models:
-- repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
-  filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
-  dest_dir: llm/qwen
-  enabled: false
-  gated: false
-  tags:
-  - llm
-  - chat
-  - multilingual
-  - russian
-  - 14b
-  - apache-2.0
-  vram_gb: 9
-  description: Qwen 2.5 14B Instruct Q4_K_M — Alibaba, Apache 2.0
-- repo_id: bartowski/Qwen2.5-32B-Instruct-GGUF
-  filename: Qwen2.5-32B-Instruct-Q4_K_M.gguf
-  dest_dir: llm/qwen
-  enabled: false
-  gated: false
-  tags:
-  - llm
-  - chat
-  - multilingual
-  - russian
-  - 32b
-  - apache-2.0
-  vram_gb: 20
-  description: Qwen 2.5 32B Instruct Q4_K_M — Alibaba, Apache 2.0
 - repo_id: bartowski/DeepSeek-R1-Distill-Qwen-14B-GGUF
   filename: DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf
   dest_dir: llm/deepseek
@@ -132,20 +104,6 @@ models:
   - apache-2.0
   vram_gb: 20
   description: Qwen2.5-Coder 32B Q4_K_M — Alibaba, Apache 2.0; 92+ programming languages
-- repo_id: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
-  filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
-  dest_dir: llm/coder
-  enabled: true
-  gated: false
-  tags:
-  - llm
-  - code
-  - 14b
-  - apache-2.0
-  vram_gb: 9.0
-  description: Qwen2.5-Coder 14B Q4_K_M — Alibaba, Apache 2.0; excellent code generation
-  s3_synced: true
-  s3_key: models/llm/coder/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
 - repo_id: gpustack/bge-m3-GGUF
   filename: bge-m3-Q8_0.gguf
   dest_dir: embeddings
