@@ -846,6 +846,121 @@ def mark_model_s3_synced(config_path: Path, model: "ModelEntry", s3_key: str) ->
         print(f"  [WARN] Could not update s3_synced in yaml: {e}")
 
 
+def relocate_model_if_moved(
+    config_path: Path,
+    model: "ModelEntry",
+    models_root: Path,
+    s3_cfg: Optional["S3Config"] = None,
+) -> bool:
+    """
+    Detect whether dest_dir changed since the last S3 sync and fix all locations.
+
+    Compares the stored s3_key (written by mark_model_s3_synced) with the key
+    derived from the current dest_dir.  If they differ:
+
+      1. Local move  — file is moved from old path to new path (including .etag).
+      2. S3 rename   — object is copied to new key then old key is deleted
+                       (only when s3_cfg is provided and valid).
+      3. yaml update — s3_key is rewritten to the new key so the flag stays
+                       consistent for future runs.
+
+    Returns True if any relocation was performed.
+    """
+    # ── Read stored s3_key ────────────────────────────────────────────────────
+    try:
+        with config_path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except Exception as e:
+        print(f"  [WARN] relocate: cannot read yaml: {e}")
+        return False
+
+    stored_s3_key: str = ""
+    for item in raw.get("models", []):
+        if item.get("repo_id") == model.repo_id and item.get("filename") == model.filename:
+            stored_s3_key = str(item.get("s3_key") or "")
+            break
+
+    if not stored_s3_key:
+        return False  # Never synced to S3 — nothing to relocate
+
+    # ── Compare with expected key from current dest_dir ───────────────────────
+    s3_prefix = s3_cfg.prefix if s3_cfg else ""
+    expected_key = _s3_key(model, s3_prefix)
+    if stored_s3_key == expected_key:
+        return False  # dest_dir unchanged — nothing to do
+
+    # ── Derive old dest_dir from stored_s3_key ────────────────────────────────
+    prefix_stripped = s3_prefix.rstrip("/")
+    rel = stored_s3_key[len(prefix_stripped) + 1:] if prefix_stripped else stored_s3_key
+    # rel == "old_dest_dir/filename"
+    if not rel.endswith(model.filename):
+        print(f"  [WARN] relocate: stored s3_key has unexpected filename: {stored_s3_key!r}")
+        return False
+    old_dest_dir = rel[: -(len(model.filename) + 1)]  # strip "/filename"
+
+    old_local = models_root / old_dest_dir / model.filename
+    new_local = models_root / model.dest_dir / model.filename
+
+    print(f"  [RELOCATE] dest_dir changed: {old_dest_dir!r} → {model.dest_dir!r}")
+
+    # ── 1. Move local file ────────────────────────────────────────────────────
+    local_ok = False
+    if new_local.is_file():
+        print(f"  [RELOCATE-LOCAL] Already at new path: {new_local}")
+        local_ok = True
+    elif old_local.is_file():
+        try:
+            new_local.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_local), str(new_local))
+            print(f"  [RELOCATE-LOCAL] Moved:\n"
+                  f"    {old_local}\n"
+                  f"  → {new_local}")
+            # Move .etag sidecar if present
+            old_etag = _etag_path(old_local)
+            if old_etag.is_file():
+                shutil.move(str(old_etag), str(_etag_path(new_local)))
+            local_ok = True
+        except Exception as e:
+            print(f"  [WARN] relocate: local move failed: {e}")
+    else:
+        print(f"  [WARN] relocate: old local file not found at {old_local}, skipping local move")
+
+    # ── 2. Rename S3 object (copy + delete) ──────────────────────────────────
+    s3_ok = False
+    if s3_cfg and s3_cfg.valid:
+        try:
+            client = _s3_client(s3_cfg)
+            client.copy_object(
+                CopySource={"Bucket": s3_cfg.bucket, "Key": stored_s3_key},
+                Bucket=s3_cfg.bucket,
+                Key=expected_key,
+            )
+            print(f"  [RELOCATE-S3]  Copied:\n"
+                  f"    s3://{s3_cfg.bucket}/{stored_s3_key}\n"
+                  f"  → s3://{s3_cfg.bucket}/{expected_key}")
+            client.delete_object(Bucket=s3_cfg.bucket, Key=stored_s3_key)
+            print(f"  [RELOCATE-S3]  Deleted old key: {stored_s3_key}")
+            s3_ok = True
+        except Exception as e:
+            print(f"  [WARN] relocate: S3 rename failed: {e}\n"
+                  f"         Old key preserved: s3://{s3_cfg.bucket}/{stored_s3_key}")
+
+    # ── 3. Update s3_key in yaml ──────────────────────────────────────────────
+    if local_ok or s3_ok:
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                raw2 = yaml.safe_load(f) or {}
+            for item in raw2.get("models", []):
+                if item.get("repo_id") == model.repo_id and item.get("filename") == model.filename:
+                    item["s3_key"] = expected_key if s3_ok else stored_s3_key
+                    break
+            _atomic_yaml_write(config_path, raw2)
+        except Exception as e:
+            print(f"  [WARN] relocate: yaml s3_key update failed: {e}")
+
+    return local_ok or s3_ok
+
+
 # ─── S3 Sync ──────────────────────────────────────────────────────────────────
 
 
@@ -1393,6 +1508,17 @@ def main() -> int:
                     )
                 )
                 continue
+
+            # Relocate if dest_dir changed since the last S3 sync.
+            # Must run before download_model so the local file is found at the
+            # correct path and is not re-downloaded unnecessarily.
+            if not args.dry_run and not args.s3_only:
+                relocate_model_if_moved(
+                    config_path=config_path,
+                    model=model,
+                    models_root=models_root,
+                    s3_cfg=s3_cfg if use_s3 else None,
+                )
 
             try:
                 result = download_model(
