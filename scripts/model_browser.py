@@ -2184,6 +2184,8 @@ async function saveSettings() {
   }, 2500);
 }
 
+</script>
+
 <!-- ── Delete Scope Modal ──────────────────────────────────── -->
 <div id="del-modal-overlay" class="del-modal-overlay" onclick="delModalCancel(event)">
   <div class="del-modal" onclick="event.stopPropagation()">
@@ -2198,7 +2200,6 @@ async function saveSettings() {
     </div>
   </div>
 </div>
-</script>
 </body>
 </html>
 """
