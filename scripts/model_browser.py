@@ -711,7 +711,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
           <th>Статус</th>
           <th>Модель / Файл</th>
           <th>Теги</th>
-          <th>VRAM</th>
           <th>Размер</th>
           <th>Описание</th>
           <th></th>
@@ -1041,10 +1040,6 @@ function renderModelRow(m, i) {
   tdTags.innerHTML = '<div class="tags-cell">' +
     (m.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') + '</div>';
 
-  const tdVram = document.createElement('td');
-  tdVram.className = 'vram';
-  tdVram.textContent = m.vram_gb ? m.vram_gb + ' GB' : '—';
-
   const tdSize = document.createElement('td');
   tdSize.className = 'cell-size ' + (m.downloaded ? 'downloaded' : 'notfound');
   tdSize.textContent = m.downloaded ? fmtSize(m.disk_size_bytes) : '—';
@@ -1067,7 +1062,7 @@ function renderModelRow(m, i) {
   btnDel.onclick = () => deleteModel(m);
   tdActions.append(btnEdit, ' ', btnDel);
 
-  tr.append(tdCb, tdStatus, tdName, tdTags, tdVram, tdSize, tdDesc, tdActions);
+  tr.append(tdCb, tdStatus, tdName, tdTags, tdSize, tdDesc, tdActions);
   return tr;
 }
 
@@ -1140,7 +1135,7 @@ function renderModels(models) {
     l1Tr.className = 'group-row-l1';
     l1Tr.dataset.group = 'l1:' + l1;
     const l1Td = document.createElement('td');
-    l1Td.colSpan = 8;
+    l1Td.colSpan = 7;
     l1Td.innerHTML =
       `<span class="group-toggle">${l1Collapsed ? '▶' : '▼'}</span>` +
       `${escHtml(l1)}<span class="group-count">${totalCount}</span>`;
@@ -1157,7 +1152,7 @@ function renderModels(models) {
       l2Tr.dataset.l1 = l1;
       l2Tr.style.display = l1Collapsed ? 'none' : '';
       const l2Td = document.createElement('td');
-      l2Td.colSpan = 8;
+      l2Td.colSpan = 7;
       const l2Label = l2.split('/').slice(1).join('/');
       l2Td.innerHTML =
         `<span class="group-toggle">${l2Collapsed ? '▶' : '▼'}</span>` +
@@ -1200,7 +1195,7 @@ function modelEditToggle(m, mainTr, btn) {
   editTr.className = 'edit-row';
 
   const td = document.createElement('td');
-  td.colSpan = 8;
+  td.colSpan = 7;
 
   const form = document.createElement('div');
   form.className = 'model-edit-form';
