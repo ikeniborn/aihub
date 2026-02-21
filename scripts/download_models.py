@@ -964,15 +964,60 @@ def relocate_model_if_moved(
             pass  # Directory not empty — leave it
 
     # ── 2. Rename S3 object (copy + delete) ──────────────────────────────────
+    # CopyObject is limited to 5 GB; use multipart copy for larger objects.
+    _S3_COPY_SIMPLE_LIMIT = 5 * 1024 ** 3   # 5 GiB
+    _S3_PART_SIZE         = 512 * 1024 ** 2  # 512 MiB per part
+
     s3_ok = False
     if s3_cfg and s3_cfg.valid:
         try:
             client = _s3_client(s3_cfg)
-            client.copy_object(
-                CopySource={"Bucket": s3_cfg.bucket, "Key": stored_s3_key},
-                Bucket=s3_cfg.bucket,
-                Key=expected_key,
-            )
+            # Determine object size to choose copy strategy
+            head = client.head_object(Bucket=s3_cfg.bucket, Key=stored_s3_key)
+            obj_size = head["ContentLength"]
+
+            if obj_size <= _S3_COPY_SIMPLE_LIMIT:
+                # Simple single-request copy
+                client.copy_object(
+                    CopySource={"Bucket": s3_cfg.bucket, "Key": stored_s3_key},
+                    Bucket=s3_cfg.bucket,
+                    Key=expected_key,
+                )
+            else:
+                # Multipart copy required for objects > 5 GiB
+                print(f"  [RELOCATE-S3]  Large object ({obj_size / 1024**3:.1f} GiB) — using multipart copy")
+                mpu = client.create_multipart_upload(Bucket=s3_cfg.bucket, Key=expected_key)
+                upload_id = mpu["UploadId"]
+                parts = []
+                try:
+                    part_num = 1
+                    offset = 0
+                    while offset < obj_size:
+                        end = min(offset + _S3_PART_SIZE - 1, obj_size - 1)
+                        resp = client.upload_part_copy(
+                            Bucket=s3_cfg.bucket,
+                            Key=expected_key,
+                            UploadId=upload_id,
+                            PartNumber=part_num,
+                            CopySource={"Bucket": s3_cfg.bucket, "Key": stored_s3_key},
+                            CopySourceRange=f"bytes={offset}-{end}",
+                        )
+                        parts.append({"PartNumber": part_num, "ETag": resp["CopyPartResult"]["ETag"]})
+                        print(f"  [RELOCATE-S3]  Part {part_num}: bytes {offset}–{end}")
+                        part_num += 1
+                        offset = end + 1
+                    client.complete_multipart_upload(
+                        Bucket=s3_cfg.bucket,
+                        Key=expected_key,
+                        UploadId=upload_id,
+                        MultipartUpload={"Parts": parts},
+                    )
+                except Exception:
+                    client.abort_multipart_upload(
+                        Bucket=s3_cfg.bucket, Key=expected_key, UploadId=upload_id
+                    )
+                    raise
+
             print(f"  [RELOCATE-S3]  Copied:\n"
                   f"    s3://{s3_cfg.bucket}/{stored_s3_key}\n"
                   f"  → s3://{s3_cfg.bucket}/{expected_key}")

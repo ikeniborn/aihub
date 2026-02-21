@@ -132,7 +132,7 @@ models:
   description: Qwen2.5-Coder 32B Q4_K_M — Alibaba, Apache 2.0; 92+ programming languages
 - repo_id: bartowski/Qwen2.5-Coder-14B-Instruct-GGUF
   filename: Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
-  dest_dir: llm/code
+  dest_dir: llm/coder
   enabled: true
   gated: false
   tags:
@@ -143,7 +143,7 @@ models:
   vram_gb: 9.0
   description: Qwen2.5-Coder 14B Q4_K_M — Alibaba, Apache 2.0; excellent code generation
   s3_synced: true
-  s3_key: models/llm/code/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
+  s3_key: models/llm/coder/Qwen2.5-Coder-14B-Instruct-Q4_K_M.gguf
 - repo_id: gpustack/bge-m3-GGUF
   filename: bge-m3-Q8_0.gguf
   dest_dir: embeddings
