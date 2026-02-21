@@ -557,7 +557,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
   /* ── Download Controls (before start) ── */
   .dl-controls {
-    display: flex; align-items: center; gap: 12px; margin-left: auto; flex-wrap: wrap;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   }
   .dl-ctrl-group {
     display: flex; align-items: center; gap: 5px;
@@ -690,9 +690,9 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <input type="checkbox" id="dl-sync-s3" class="dl-ctrl-checkbox">
       </div>
       <button class="dl-save-btn" id="dl-save-btn" onclick="saveSettings()" title="Сохранить параметры в models.yaml">Сохранить настройки</button>
-      <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели">▶ Скачать enabled</button>
     </div>
-    <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none;margin-left:auto">Отменить</button>
+    <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели" style="margin-left:auto">▶ Скачать enabled</button>
+    <button class="btn-secondary" id="dl-cancel-btn" onclick="dlCancel()" style="display:none">Отменить</button>
     <span class="status-msg" id="dl-status-msg"></span>
   </div>
   <div class="download-panel" id="download-panel" style="display:none">
