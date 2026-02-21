@@ -51,6 +51,70 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils import fmt_size, load_hf_token  # noqa: E402
 
 
+# ─── S3 Config (minimal, for delete operations) ────────────────────────────────
+
+
+class S3DeleteConfig:
+    """Minimal S3 configuration needed for delete operations in model_browser."""
+
+    def __init__(self) -> None:
+        self.access_key_id: str = ""
+        self.secret_access_key: str = ""
+        self.region: str = "us-east-1"
+        self.endpoint_url: str = ""
+        self.bucket: str = ""
+        self.prefix: str = "models"
+
+    @property
+    def valid(self) -> bool:
+        return bool(self.bucket and self.access_key_id and self.secret_access_key)
+
+
+def _load_s3_config(config_path: Path) -> S3DeleteConfig:
+    """
+    Load S3 configuration from credentials.yaml + environment variables.
+
+    credentials.yaml structure:
+        s3:
+          access_key_id: ...
+          secret_access_key: ...
+
+    Environment variables (override credentials.yaml):
+        AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY,
+        S3_REGION, S3_ENDPOINT_URL, S3_BUCKET, S3_PREFIX
+    """
+    cfg = S3DeleteConfig()
+
+    creds_path = config_path.parent / "credentials.yaml"
+    if creds_path.is_file():
+        try:
+            with creds_path.open("r", encoding="utf-8") as f:
+                raw = yaml.safe_load(f) or {}
+            s3_section = raw.get("s3", {}) or {}
+            cfg.access_key_id = s3_section.get("access_key_id", "") or ""
+            cfg.secret_access_key = s3_section.get("secret_access_key", "") or ""
+        except Exception:
+            pass
+
+    # Environment overrides
+    cfg.access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", cfg.access_key_id) or cfg.access_key_id
+    cfg.secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", cfg.secret_access_key) or cfg.secret_access_key
+    cfg.region = os.environ.get("S3_REGION", "us-east-1")
+    cfg.endpoint_url = os.environ.get("S3_ENDPOINT_URL", "")
+    cfg.bucket = os.environ.get("S3_BUCKET", "")
+    cfg.prefix = os.environ.get("S3_PREFIX", "models")
+
+    return cfg
+
+
+def _s3_object_key(dest_dir: str, filename: str, prefix: str) -> str:
+    """Compute S3 object key: {prefix}/{dest_dir}/{filename}."""
+    prefix = prefix.rstrip("/")
+    if prefix:
+        return f"{prefix}/{dest_dir}/{filename}"
+    return f"{dest_dir}/{filename}"
+
+
 # ─── Threaded HTTP server ──────────────────────────────────────────────────────
 
 
@@ -2401,15 +2465,103 @@ def add_models_to_yaml(
     return {"added": added, "skipped": skipped}
 
 
+def s3_delete_model(
+    s3_cfg: S3DeleteConfig,
+    dest_dir: str,
+    filename: str,
+) -> dict:
+    """
+    Удаляет объект модели из S3.
+
+    Возвращает {"removed_s3": bool, "s3_key": str, "error": str|None}.
+    404 трактуется как успех (объект уже не существует).
+    """
+    if not s3_cfg.valid:
+        return {"removed_s3": False, "s3_key": "", "error": "S3 не настроен (отсутствуют credentials или bucket)"}
+
+    key = _s3_object_key(dest_dir, filename, s3_cfg.prefix)
+    try:
+        import boto3
+        from botocore.config import Config as BotocoreConfig
+
+        kwargs: dict = {
+            "aws_access_key_id": s3_cfg.access_key_id,
+            "aws_secret_access_key": s3_cfg.secret_access_key,
+            "region_name": s3_cfg.region,
+        }
+        if s3_cfg.endpoint_url:
+            kwargs["endpoint_url"] = s3_cfg.endpoint_url
+
+        client = boto3.client("s3", **kwargs)
+
+        # Check if object exists before deleting (to report removed_s3 accurately)
+        exists = False
+        try:
+            client.head_object(Bucket=s3_cfg.bucket, Key=key)
+            exists = True
+        except Exception as head_exc:
+            err_str = str(head_exc)
+            if any(x in err_str for x in ("404", "NoSuchKey", "Not Found")):
+                exists = False  # Already gone — treat as success
+            else:
+                return {"removed_s3": False, "s3_key": key, "error": f"S3 head_object ошибка: {head_exc}"}
+
+        if exists:
+            client.delete_object(Bucket=s3_cfg.bucket, Key=key)
+
+        return {"removed_s3": exists, "s3_key": key, "error": None}
+
+    except ImportError:
+        return {"removed_s3": False, "s3_key": key, "error": "boto3 не установлен (pip install boto3)"}
+    except Exception as exc:
+        return {"removed_s3": False, "s3_key": key, "error": str(exc)}
+
+
+def _clear_s3_metadata(config_path: Path, repo_id: str, filename: str) -> None:
+    """
+    Атомарно очищает s3_synced и s3_key в yaml после удаления из S3.
+    Вызывается для scope='s3_only' и scope='everywhere'.
+    """
+    try:
+        raw = load_yaml(config_path)
+        for item in raw.get("models", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("repo_id") == repo_id and item.get("filename") == filename:
+                item["s3_synced"] = False
+                item.pop("s3_key", None)
+                break
+        _atomic_yaml_write(config_path, raw)
+    except Exception as e:
+        print(f"  [WARN] _clear_s3_metadata: не удалось обновить yaml: {e}", file=sys.stderr)
+
+
 def delete_model(
     config_path: Path,
     repo_id: str,
     filename: str,
+    scope: str = "everywhere",
+    s3_cfg: Optional[S3DeleteConfig] = None,
 ) -> dict:
     """
-    Удаляет модель из models.yaml и, если файл существует на диске, удаляет его.
+    Удаляет модель согласно выбранному scope.
 
-    Возвращает {"removed_yaml": bool, "removed_file": bool, "file_path": str|None}.
+    scope:
+        'local_only'  — удалить файл с диска, оставить запись в yaml (сохраняет S3)
+        's3_only'     — удалить из S3, очистить s3_synced/s3_key в yaml, оставить запись
+        'everywhere'  — удалить файл + S3 + запись из yaml (полное удаление)
+
+    Возвращает:
+        {
+          "removed_yaml": bool,   # запись удалена из yaml
+          "removed_file": bool,   # файл удалён с диска
+          "removed_s3": bool,     # объект удалён из S3
+          "file_path": str|None,
+          "s3_key": str,
+          "s3_error": str|None,   # ошибка S3 если была
+        }
+
+    Порядок операций: local → S3 → yaml (не удалять из yaml если оба провалились).
     """
     # Filename must not contain path separators (prevents traversal via crafted filename)
     if Path(filename).name != filename:
@@ -2417,39 +2569,88 @@ def delete_model(
             f"Недопустимое имя файла '{filename}': разделители пути не разрешены"
         )
 
+    if scope not in ("local_only", "s3_only", "everywhere"):
+        raise ValueError(f"Недопустимый scope: '{scope}'. Допустимые значения: local_only, s3_only, everywhere")
+
     raw = load_yaml(config_path)
     settings: dict = raw.get("settings", {})
     models_dir = Path(settings.get("models_dir", "./models"))
     if not models_dir.is_absolute():
         models_dir = config_path.parent / models_dir
 
+    # Find the model entry
     models_list = raw.get("models", []) or []
-    new_list = []
-    removed_yaml = False
-    removed_file = False
-    file_path_str: Optional[str] = None
-
+    target_item: Optional[dict] = None
     for item in models_list:
-        if not isinstance(item, dict):
-            new_list.append(item)
-            continue
-        if item.get("repo_id") == repo_id and item.get("filename") == filename:
-            removed_yaml = True
-            dest_dir = item.get("dest_dir", "misc")
-            local_file = models_dir / dest_dir / filename
-            file_path_str = str(local_file)
-            if local_file.is_file():
-                local_file.unlink()
-                removed_file = True
-        else:
-            new_list.append(item)
+        if isinstance(item, dict) and item.get("repo_id") == repo_id and item.get("filename") == filename:
+            target_item = item
+            break
 
-    if not removed_yaml:
+    if target_item is None:
         raise ValueError(f"Запись не найдена: {repo_id}::{filename}")
 
-    raw["models"] = new_list
-    _atomic_yaml_write(config_path, raw)
-    return {"removed_yaml": removed_yaml, "removed_file": removed_file, "file_path": file_path_str}
+    dest_dir = target_item.get("dest_dir", "misc")
+    local_file = models_dir / dest_dir / filename
+    file_path_str = str(local_file)
+
+    removed_file = False
+    removed_s3 = False
+    s3_key = ""
+    s3_error: Optional[str] = None
+
+    # ── Step 1: Delete local file (for local_only and everywhere) ─────────────
+    if scope in ("local_only", "everywhere"):
+        if local_file.is_file():
+            local_file.unlink()
+            removed_file = True
+            # Also remove .etag sidecar if present
+            etag_file = local_file.with_suffix(local_file.suffix + ".etag")
+            if etag_file.is_file():
+                try:
+                    etag_file.unlink()
+                except OSError:
+                    pass
+
+    # ── Step 2: Delete from S3 (for s3_only and everywhere) ──────────────────
+    if scope in ("s3_only", "everywhere"):
+        _s3_cfg = s3_cfg if s3_cfg is not None else _load_s3_config(config_path)
+        if _s3_cfg.valid:
+            s3_result = s3_delete_model(_s3_cfg, dest_dir, filename)
+            removed_s3 = s3_result["removed_s3"]
+            s3_key = s3_result["s3_key"]
+            s3_error = s3_result["error"]
+        else:
+            s3_error = "S3 не настроен"
+
+        # Clear s3_synced + s3_key in yaml regardless of actual delete result
+        # (if object is gone, metadata should reflect that)
+        _clear_s3_metadata(config_path, repo_id, filename)
+        # Reload raw after _clear_s3_metadata wrote it
+        raw = load_yaml(config_path)
+        models_list = raw.get("models", []) or []
+
+    # ── Step 3: Remove from yaml (for everywhere scope only) ─────────────────
+    removed_yaml = False
+    if scope == "everywhere":
+        new_list = [
+            item for item in models_list
+            if not (isinstance(item, dict)
+                    and item.get("repo_id") == repo_id
+                    and item.get("filename") == filename)
+        ]
+        if len(new_list) < len(models_list):
+            removed_yaml = True
+        raw["models"] = new_list
+        _atomic_yaml_write(config_path, raw)
+
+    return {
+        "removed_yaml": removed_yaml,
+        "removed_file": removed_file,
+        "removed_s3": removed_s3,
+        "file_path": file_path_str,
+        "s3_key": s3_key,
+        "s3_error": s3_error,
+    }
 
 
 def _atomic_yaml_write(config_path: Path, data: dict) -> None:
@@ -2744,9 +2945,16 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             try:
                 repo_id = str(payload.get("repo_id", "")).strip()
                 filename = str(payload.get("filename", "")).strip()
+                scope = str(payload.get("scope", "everywhere")).strip()
                 if not repo_id or not filename:
                     raise ValueError("repo_id и filename обязательны")
-                result = delete_model(self.config_path, repo_id, filename)
+                if scope not in ("local_only", "s3_only", "everywhere"):
+                    raise ValueError(f"Недопустимый scope: '{scope}'")
+                # For S3 scopes, load credentials once and pass to delete_model
+                s3_cfg: Optional[S3DeleteConfig] = None
+                if scope in ("s3_only", "everywhere"):
+                    s3_cfg = _load_s3_config(self.config_path)
+                result = delete_model(self.config_path, repo_id, filename, scope=scope, s3_cfg=s3_cfg)
                 self._send_json({"status": "ok", **result})
             except (ValueError, TypeError) as e:
                 self._send_json({"error": str(e)}, status=400)
