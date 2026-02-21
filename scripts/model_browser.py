@@ -305,6 +305,50 @@ HTML_PAGE = r"""<!DOCTYPE html>
     white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
   }
   .btn-delete:hover { opacity: 1; background: #450a0a; }
+
+  /* ── Delete Scope Modal ── */
+  .del-modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 1000; align-items: center; justify-content: center;
+  }
+  .del-modal-overlay.active { display: flex; }
+  .del-modal {
+    background: var(--bg-surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 24px 28px; min-width: 340px; max-width: 480px; width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .del-modal h3 { font-size: 1rem; font-weight: 700; color: var(--red); margin-bottom: 8px; }
+  .del-modal-filename {
+    font-size: 0.8rem; color: var(--text-muted); word-break: break-all;
+    margin-bottom: 16px; padding: 6px 10px; background: var(--bg-elevated);
+    border-radius: 5px; border: 1px solid var(--border);
+  }
+  .del-scope-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+  .del-scope-option {
+    display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+    border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .del-scope-option:not(.disabled):hover { border-color: var(--accent); background: var(--bg-elevated); }
+  .del-scope-option.selected { border-color: var(--accent); background: var(--bg-elevated); }
+  .del-scope-option.disabled { opacity: 0.35; cursor: not-allowed; }
+  .del-scope-option input[type=radio] { accent-color: var(--accent); margin-top: 2px; flex-shrink: 0; }
+  .del-scope-label { font-size: 0.875rem; font-weight: 600; color: var(--text-primary); }
+  .del-scope-desc { font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+  .del-scope-warn { font-size: 0.72rem; color: var(--yellow); margin-top: 3px; }
+  .del-modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+  .del-btn-confirm {
+    background: #7f1d1d; border: 1px solid #991b1b; color: #fca5a5;
+    padding: 7px 18px; border-radius: 6px; font-size: 0.875rem; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .del-btn-confirm:hover { background: #991b1b; }
+  .del-btn-cancel {
+    background: none; border: 1px solid var(--border); color: var(--text-secondary);
+    padding: 7px 16px; border-radius: 6px; font-size: 0.875rem; cursor: pointer;
+    transition: background 0.15s;
+  }
+  .del-btn-cancel:hover { background: var(--bg-elevated); }
   .btn-edit {
     background: none; border: 1px solid #1e3a5f; border-radius: 4px;
     color: #7dd3fc; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
@@ -1017,9 +1061,7 @@ function renderModelRow(m, i) {
   const btnDel = document.createElement('button');
   btnDel.className = 'btn-delete';
   btnDel.textContent = '✕';
-  btnDel.title = m.downloaded
-    ? 'Удалить файл и убрать из models.yaml'
-    : 'Убрать из models.yaml';
+  btnDel.title = 'Удалить модель (локально / S3 / везде)';
   btnDel.onclick = () => deleteModel(m);
   tdActions.append(btnEdit, ' ', btnDel);
 
@@ -1266,22 +1308,100 @@ async function modelEditSave(m, editTr, mainTr, btn) {
   }
 }
 
-async function deleteModel(m) {
-  const hasFile = m.downloaded;
-  const msg = hasFile
-    ? `Удалить файл «${m.filename}» с диска и убрать запись из models.yaml?`
-    : `Убрать «${m.filename}» из models.yaml?\n(Файл не найден на диске)`;
-  if (!confirm(msg)) return;
+// ── Delete Scope Modal ───────────────────────────────────────────────────────
+let _delTarget = null;   // { repo_id, filename, scope } set when modal opens
+
+function deleteModel(m) {
+  _delTarget = { repo_id: m.repo_id, filename: m.filename, scope: 'everywhere' };
+
+  // Populate filename label
+  document.getElementById('del-modal-filename').textContent =
+    m.filename + ' (' + m.repo_id + ')';
+
+  const s3Available = Boolean(m.s3_available);
+
+  // Build scope options
+  const scopeGroup = document.getElementById('del-scope-group');
+  scopeGroup.innerHTML = '';
+
+  const options = [
+    {
+      value: 'local_only',
+      label: 'Только локально',
+      desc: 'Удалить файл с диска. Запись в models.yaml и копия в S3 сохранятся.',
+      disabled: !m.downloaded,
+      warn: !m.downloaded ? 'Файл не скачан' : '',
+    },
+    {
+      value: 's3_only',
+      label: 'Только из S3',
+      desc: 'Удалить объект из S3-хранилища. Локальный файл и запись сохранятся.',
+      disabled: !s3Available,
+      warn: !s3Available ? 'Модель не синхронизирована с S3' : '',
+    },
+    {
+      value: 'everywhere',
+      label: 'Везде',
+      desc: 'Удалить файл с диска, из S3 и убрать запись из models.yaml.',
+      disabled: false,
+      warn: !m.downloaded && !s3Available ? 'Только запись в yaml будет удалена' : '',
+    },
+  ];
+
+  options.forEach(opt => {
+    const div = document.createElement('div');
+    div.className = 'del-scope-option' + (opt.disabled ? ' disabled' : '') +
+                    (opt.value === 'everywhere' ? ' selected' : '');
+    div.innerHTML =
+      `<input type="radio" name="del-scope" value="${opt.value}"` +
+      (opt.value === 'everywhere' ? ' checked' : '') +
+      (opt.disabled ? ' disabled' : '') + '>' +
+      `<div><div class="del-scope-label">${escHtml(opt.label)}</div>` +
+      `<div class="del-scope-desc">${escHtml(opt.desc)}</div>` +
+      (opt.warn ? `<div class="del-scope-warn">⚠ ${escHtml(opt.warn)}</div>` : '') +
+      '</div>';
+    if (!opt.disabled) {
+      div.onclick = () => {
+        const rb = div.querySelector('input[type=radio]');
+        if (rb) rb.checked = true;
+        scopeGroup.querySelectorAll('.del-scope-option').forEach(d => d.classList.remove('selected'));
+        div.classList.add('selected');
+        _delTarget.scope = opt.value;
+      };
+    }
+    scopeGroup.appendChild(div);
+  });
+
+  // Show overlay
+  document.getElementById('del-modal-overlay').classList.add('active');
+}
+
+function delModalCancel(ev) {
+  if (ev && ev.target !== document.getElementById('del-modal-overlay')) return;
+  document.getElementById('del-modal-overlay').classList.remove('active');
+  _delTarget = null;
+}
+
+async function delModalConfirm() {
+  if (!_delTarget) return;
+  document.getElementById('del-modal-overlay').classList.remove('active');
+
+  // Read selected radio (may differ from _delTarget.scope if user clicked radio directly)
+  const checked = document.querySelector('input[name=del-scope]:checked');
+  const scope = checked ? checked.value : _delTarget.scope;
+
   try {
     const resp = await fetch('/api/delete', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+      body: JSON.stringify({ repo_id: _delTarget.repo_id, filename: _delTarget.filename, scope }),
     });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'HTTP ' + resp.status);
     loadModels();
   } catch (e) {
     alert('Ошибка удаления: ' + e.message);
+  } finally {
+    _delTarget = null;
   }
 }
 
@@ -2062,6 +2182,21 @@ async function saveSettings() {
     btn.classList.remove('saved', 'error');
   }, 2500);
 }
+
+<!-- ── Delete Scope Modal ──────────────────────────────────── -->
+<div id="del-modal-overlay" class="del-modal-overlay" onclick="delModalCancel(event)">
+  <div class="del-modal" onclick="event.stopPropagation()">
+    <h3>Удалить модель</h3>
+    <div class="del-modal-filename" id="del-modal-filename"></div>
+    <div class="del-scope-group" id="del-scope-group">
+      <!-- Options are rendered dynamically by deleteModel() -->
+    </div>
+    <div class="del-modal-actions">
+      <button class="del-btn-cancel" onclick="delModalCancel()">Отмена</button>
+      <button class="del-btn-confirm" onclick="delModalConfirm()">Удалить</button>
+    </div>
+  </div>
+</div>
 </script>
 </body>
 </html>
