@@ -629,7 +629,7 @@ def download_model(
     Uses hf_hub_download() which writes atomically (temp file → rename).
     """
     from huggingface_hub import HfApi, hf_hub_download
-    from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError
+    from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, RepositoryNotFoundError
 
     local_dir = models_root / model.dest_dir
     local_file = local_dir / model.filename
@@ -746,6 +746,18 @@ def download_model(
 
             except TimeoutError:
                 raise  # propagate to main() — exit the entire process
+            except GatedRepoError:
+                # Доступ закрыт — токен есть, но аккаунт не в списке разрешённых.
+                # Повторять бессмысленно: нужно запросить доступ вручную.
+                return DownloadResult(
+                    model=model,
+                    status="ERROR",
+                    error=(
+                        f"Доступ запрещён (gated repo): {model.repo_id}\n"
+                        f"  Действие: перейдите на https://huggingface.co/{model.repo_id}\n"
+                        f"  и нажмите «Access repository» / «Request access», затем повторите загрузку."
+                    ),
+                )
             except EntryNotFoundError:
                 # Файл не найден в репо — не имеет смысла повторять
                 return DownloadResult(
@@ -760,6 +772,23 @@ def download_model(
                 last_exc = exc
                 err_str = str(exc)
                 is_rate_limit = "429" in err_str or "rate limit" in err_str.lower()
+                is_gated = (
+                    "403" in err_str
+                    and ("authorized list" in err_str or "gated" in err_str.lower()
+                         or "restricted" in err_str.lower())
+                )
+
+                # Gated 403 — повторять бессмысленно, нужно действие пользователя
+                if is_gated:
+                    return DownloadResult(
+                        model=model,
+                        status="ERROR",
+                        error=(
+                            f"Доступ запрещён (gated repo): {model.repo_id}\n"
+                            f"  Действие: перейдите на https://huggingface.co/{model.repo_id}\n"
+                            f"  и нажмите «Access repository» / «Request access», затем повторите загрузку."
+                        ),
+                    )
 
                 if attempt >= retry_count:
                     break  # все попытки исчерпаны
