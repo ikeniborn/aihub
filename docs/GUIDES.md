@@ -410,7 +410,7 @@ python scripts/browse_models.py \
 ```
 
 Вывод скопировать в раздел `models:` файла `models.yaml`.
-После вставки заполнить поля `dest_dir`, `tags`, `vram_gb`, `description` и поставить `enabled: true`.
+После вставки заполнить поля `dest_dir`, `tags`, `description` и поставить `enabled: true`.
 
 ---
 
@@ -639,7 +639,6 @@ python scripts/download_models.py             # загрузить
     enabled: true
     gated: false
     tags: [llm, reasoning, code, 14b]
-    vram_gb: 8
     description: "Phi-4 14B — Microsoft, MIT"
 ```
 

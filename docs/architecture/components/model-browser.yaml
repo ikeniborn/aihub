@@ -26,7 +26,7 @@ rest_api:
   GET /api/models:
     description: "Return all model entries enriched with disk info"
     response: "JSON array of model objects"
-    model_fields: [repo_id, filename, dest_dir, enabled, gated, tags, vram_gb, description, downloaded, disk_size_bytes, disk_size_str]
+    model_fields: [repo_id, filename, dest_dir, enabled, gated, tags, description, downloaded, disk_size_bytes, disk_size_str]
 
   POST /api/save:
     description: "Atomically update enabled flags in models.yaml"

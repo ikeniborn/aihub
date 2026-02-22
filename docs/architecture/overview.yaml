@@ -167,7 +167,7 @@ components:
       Central YAML configuration file defining the list of AI models to manage.
       Contains global settings (models_dir, update_policy, retry parameters,
       S3 sync flags) and per-model entries with repo_id, filename, dest_dir,
-      enabled flag, gated flag, tags, vram_gb, and description. Read by
+      enabled flag, gated flag, tags, and description. Read by
       download_models.py and model_browser.py; written atomically by model_browser.py.
     schema:
       settings:
@@ -185,7 +185,6 @@ components:
         - enabled (bool, default: true)
         - gated (bool, default: false)
         - tags (list[str])
-        - vram_gb (float)
         - description (str)
     dependencies: []
 

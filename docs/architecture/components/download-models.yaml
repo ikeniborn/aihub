@@ -41,7 +41,7 @@ key_behaviors:
 
 data_classes:
   ModelEntry:
-    fields: [repo_id, filename, dest_dir, enabled, gated, tags, vram_gb, description]
+    fields: [repo_id, filename, dest_dir, enabled, gated, tags, description]
   S3Config:
     fields: [access_key_id, secret_access_key, region, endpoint_url, bucket, prefix]
     property: valid (bool — all required fields present)
