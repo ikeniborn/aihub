@@ -1690,9 +1690,13 @@ function renderHfResults(results) {
   results.forEach(r => {
     // files is now [{name, size_bytes}, ...] or [] → normalise to [{name, size_bytes}] or [null]
     const rawFiles = r.files && r.files.length > 0 ? r.files : [null];
-    // For Ollama results: capability tags (excluding "N variants") stored as JSON for filtering
+    // For Ollama results: all tags (except bare "N variants") stored for capability filter
     const ollamaCaps = r.source === 'ollama'
-      ? JSON.stringify((r.tags || []).filter(t => !/\d+\s+variants?/i.test(t)).map(t => t.toLowerCase()))
+      ? JSON.stringify(
+          (r.tags || [])
+            .filter(t => !/^\d+\s+variants?$/i.test(t.trim()))
+            .map(t => t.trim().toLowerCase())
+        )
       : null;
     rawFiles.forEach((fileObj, fi) => {
       const fname = fileObj ? (typeof fileObj === 'object' ? fileObj.name : fileObj) : null;
@@ -1788,22 +1792,29 @@ function renderHfResults(results) {
   hfApplySizeFilter();
 }
 
-// ── Ollama capability filter ────────────────────────────────────────────────
+// ── Ollama capability / tag filter ──────────────────────────────────────────
 
 function rebuildOllamaCapsChips(results) {
   const row = document.getElementById('ollama-caps-row');
   const chips = document.getElementById('ollama-caps-chips');
   if (!row || !chips) return;
 
-  // Collect unique capability tags (exclude "N variants")
-  const capsSet = new Set();
+  // Collect all unique non-empty tags across results (capabilities + size tags etc.)
+  // Exclude bare "N variants" since those are just counts, not useful filter values
+  const capCount = new Map(); // cap → count of results that have it
   results.forEach(r => {
+    const seen = new Set();
     (r.tags || []).forEach(t => {
-      if (!/^\d+\s+variants?$/i.test(t.trim())) capsSet.add(t.trim().toLowerCase());
+      const norm = t.trim().toLowerCase();
+      if (!norm || /^\d+\s+variants?$/i.test(norm)) return;
+      if (!seen.has(norm)) {
+        seen.add(norm);
+        capCount.set(norm, (capCount.get(norm) || 0) + 1);
+      }
     });
   });
 
-  if (capsSet.size === 0) { row.style.display = 'none'; return; }
+  if (capCount.size === 0) { row.style.display = 'none'; return; }
 
   chips.innerHTML = '';
   // "Все" chip — clears filter
@@ -1813,11 +1824,15 @@ function rebuildOllamaCapsChips(results) {
   allChip.onclick = clearOllamaCaps;
   chips.appendChild(allChip);
 
-  [...capsSet].sort().forEach(cap => {
+  // Sort: higher count first, then alphabetically
+  const sorted = [...capCount.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  sorted.forEach(([cap, count]) => {
     const chip = document.createElement('span');
     chip.className = 'filter-chip';
     chip.dataset.cap = cap;
-    chip.textContent = cap;
+    const countBadge = count > 1 ? `<small style="opacity:0.65;font-size:0.75em"> (${count})</small>` : '';
+    chip.innerHTML = escHtml(cap) + countBadge;
+    chip.title = `Показать модели с тегом "${cap}" (${count} из ${results.length})`;
     chip.onclick = () => toggleOllamaCap(chip);
     chips.appendChild(chip);
   });
@@ -1827,7 +1842,7 @@ function rebuildOllamaCapsChips(results) {
 
 function clearOllamaCaps() {
   document.querySelectorAll('#ollama-caps-chips .filter-chip').forEach(c => {
-    c.classList.toggle('active', !c.dataset.cap); // активен только "Все"
+    c.classList.toggle('active', !c.dataset.cap); // только "Все" активен
   });
   applyOllamaCapsFilter();
 }
@@ -1846,11 +1861,22 @@ function applyOllamaCapsFilter() {
     .map(c => c.dataset.cap);
   const tbody = document.getElementById('hf-results-body');
   if (!tbody) return;
-  tbody.querySelectorAll('tr').forEach(tr => {
-    if (activeCaps.length === 0) { tr.style.display = ''; return; }
+  let visible = 0;
+  const rows = tbody.querySelectorAll('tr');
+  rows.forEach(tr => {
+    if (activeCaps.length === 0) { tr.style.display = ''; visible++; return; }
     const rowCaps = JSON.parse(tr.dataset.caps || '[]');
-    tr.style.display = activeCaps.some(ac => rowCaps.includes(ac)) ? '' : 'none';
+    const show = activeCaps.some(ac => rowCaps.includes(ac));
+    tr.style.display = show ? '' : 'none';
+    if (show) visible++;
   });
+  // Update inline count badge in results controls bar
+  const countEl = document.getElementById('hf-results-count');
+  if (countEl) {
+    countEl.textContent = activeCaps.length > 0
+      ? `Фильтр: ${visible} / ${rows.length}`
+      : '';
+  }
 }
 
 function hfSelectionChange(cb, r, fname) {

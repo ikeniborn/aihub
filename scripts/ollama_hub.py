@@ -31,6 +31,7 @@ Progress markers (compatible with model_browser.py worker parser):
 
 from __future__ import annotations
 
+import html as _html
 import json
 import re
 import sys
@@ -60,6 +61,16 @@ _OLLAMA_TAG_RE = re.compile(r"^[\w.\-]+(\/[\w.\-]+)?(:([\w.\-]+))?$")
 
 # Chunk size for streaming download (512 KB)
 _CHUNK_SIZE = 512 * 1024
+
+# Capability badge regex — matches any Tailwind bg-{color}-{shade} span
+# Covers all common badge colours used by ollama.com (tools, vision, cloud, embed, thinking, …)
+_CAP_BADGE_RE = re.compile(
+    r'<span[^>]+\bbg-(?:'
+    r'cyan|teal|green|emerald|sky|blue|indigo|violet|purple|fuchsia|'
+    r'pink|rose|orange|amber|yellow|lime|red'
+    r')-\d+[^>]*>(.*?)</span>',
+    re.DOTALL,
+)
 
 
 # ─── Proxy-aware requests session ─────────────────────────────────────────────
@@ -313,7 +324,6 @@ def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
             description = ""
             if desc_m:
                 # Strip any embedded HTML tags, then decode HTML entities
-                import html as _html
                 raw_desc = re.sub(r'<[^>]+>', '', desc_m.group(1)).strip()
                 description = _html.unescape(raw_desc)
 
@@ -328,16 +338,17 @@ def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
             tag_count_m = re.search(r'x-test-tag-count[^>]*>\s*(\d+)\s*<', card)
             tag_count = int(tag_count_m.group(1)) if tag_count_m else 0
 
-            # Capability badges from cyan-coloured spans (tools, vision, cloud, etc.)
-            capability_tags = re.findall(
-                r'<span[^>]+bg-cyan-\d+[^>]*>\s*([^<]{2,30}?)\s*</span>',
-                card,
-            )
-            # Also look for other colored badge spans (some models use teal/green)
-            capability_tags += re.findall(
-                r'<span[^>]+bg-(?:teal|green|emerald|sky)-\d+[^>]*>\s*([^<]{2,30}?)\s*</span>',
-                card,
-            )
+            # Capability badges: any Tailwind bg-{color}-{shade} span
+            # (tools, vision, cloud, embed, thinking, reasoning, code, etc.)
+            seen_caps: set = set()
+            capability_tags = []
+            for raw in _CAP_BADGE_RE.findall(card):
+                # Strip inner HTML (SVG icons etc.), decode entities, normalise spaces
+                text = _html.unescape(re.sub(r'<[^>]+>', '', raw)).strip()
+                text = ' '.join(text.split())
+                if 2 <= len(text) <= 30 and text not in seen_caps:
+                    seen_caps.add(text)
+                    capability_tags.append(text)
 
             results.append({
                 "model_tag": model_name,
@@ -648,7 +659,7 @@ def download_model_gguf(
                 if part_path.is_file():
                     _os.replace(str(part_path), str(dest_path))
                     _write_local_digest(dest_path, remote_digest)
-                    print(f"  [OK]   Saved to: {dest_path}  (range exhausted — file complete)")
+                    print(f"  [RESUME] File already complete (416) — renamed part file")
                     return dest_path
                 raise RuntimeError("Server returned 416 but no part file present")
 
@@ -696,7 +707,6 @@ def download_model_gguf(
             _os.replace(str(part_path), str(dest_path))
             _write_local_digest(dest_path, remote_digest)
 
-            print(f"  [OK]   Saved to: {dest_path}  ({fmt_size(bytes_done)})")
             return dest_path
 
         except Exception as exc:
