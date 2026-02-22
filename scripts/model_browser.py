@@ -21,6 +21,7 @@ API:
     GET  /api/search?q=&author=&file_regex=&limit=  — поиск на HuggingFace Hub
     POST /api/add                 — добавить модели из результатов поиска в models.yaml
     POST /api/download/start      — запустить загрузку enabled моделей в фоновом потоке
+    GET  /api/download/status     — текущий статус загрузки (running, current, progress, status_map)
     GET  /api/download/stream     — SSE поток прогресса загрузки (running, current, log, status_map)
     POST /api/download/cancel     — отменить текущую загрузку
 """
@@ -151,6 +152,45 @@ download_state: DownloadState = {
     "done_count": 0,
     "status_map": {},
 }
+
+
+def _check_stale_download_state() -> bool:
+    """
+    Detect and repair stale download_state where running=True but the worker
+    process is no longer alive.
+
+    This can happen in two scenarios:
+    1. The SSE 2-hour deadline fires and the stream closes, but _download_worker
+       hasn't called proc.wait() yet — or crashed before the finally block ran.
+    2. The server process was OOM-killed or received SIGKILL between the subprocess
+       exit and the finally block execution.
+
+    Returns True if the state was repaired (was stale), False if state is consistent.
+    Called at the start of /api/download/stream and /api/download/start handlers.
+    """
+    with _dl_lock:
+        if not download_state["running"]:
+            return False  # Not running — nothing to check
+        proc = download_state.get("process")
+        if proc is None:
+            # running=True but no process reference — definitely stale
+            download_state["running"] = False
+            download_state["log"].append(
+                "[WORKER] auto-reset: running=True but process=None (stale state detected)"
+            )
+            return True
+        # Process reference exists — check if it's still alive
+        poll_result = proc.poll()
+        if poll_result is not None:
+            # Process has exited but state wasn't reset — clean up
+            download_state["running"] = False
+            download_state["process"] = None
+            download_state["progress"] = 100
+            download_state["log"].append(
+                f"[WORKER] auto-reset: process exited (rc={poll_result}) without clearing running flag"
+            )
+            return True
+        return False  # Process is alive — state is consistent
 
 
 # ─── HTML ─────────────────────────────────────────────────────────────────────
@@ -1977,6 +2017,7 @@ function dlAttach() {
   _dlEventSource = new EventSource('/api/download/stream');
   _dlEventSource.onmessage = function(e) {
     let d; try { d = JSON.parse(e.data); } catch(_) { return; }
+    if (d.ping) return;  // heartbeat — ignore
     _dlOnMessage(d);
   };
   _dlEventSource.onerror = function() { dlDone(); };
@@ -2074,18 +2115,19 @@ loadModels();
 loadSettings();
 checkRunningDownload();
 
-// Resume download panel if a download is already running (e.g. after page refresh)
-function checkRunningDownload() {
-  const probe = new EventSource('/api/download/stream');
-  probe.onmessage = function(e) {
-    probe.close();
-    let d; try { d = JSON.parse(e.data); } catch(_) { return; }
+// Resume download panel if a download is already running (e.g. after page refresh).
+// Uses a lightweight JSON fetch instead of an EventSource probe to avoid holding
+// a server thread open just for the initial status check.
+async function checkRunningDownload() {
+  try {
+    const resp = await fetch('/api/download/status');
+    if (!resp.ok) return;
+    const d = await resp.json();
     if (!d.running) return;
     // Download is in progress — show panel and attach SSE without POSTing /start
     document.getElementById('dl-start-btn').disabled = true;
     dlAttach();
-  };
-  probe.onerror = function() { probe.close(); };
+  } catch (_) {}
 }
 
 async function loadSettings() {
@@ -2865,11 +2907,34 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e), "results": []}, status=500)
 
+        elif path == "/api/download/status":
+            # Lightweight status poll — returns current download_state snapshot
+            # without opening an SSE stream. Used by checkRunningDownload() on
+            # page load to avoid holding a server thread for the probe.
+            _check_stale_download_state()
+            with _dl_lock:
+                snapshot = {
+                    "running": download_state["running"],
+                    "cancelled": download_state["cancelled"],
+                    "current": download_state["current"],
+                    "progress": download_state["progress"],
+                    "model_count": download_state["model_count"],
+                    "done_count": download_state["done_count"],
+                    "status_map": dict(download_state["status_map"]),
+                }
+            self._send_json(snapshot)
+
         elif path == "/api/download/stream":
+            # Check and repair stale state before opening SSE stream.
+            # This ensures that if the process died without resetting running=False,
+            # the first SSE snapshot already has running=False so the browser
+            # doesn't show a permanently-stuck download indicator.
+            _check_stale_download_state()
             self._send_sse_headers()
             # Defensive deadline: auto-close stream after 2 hours even if
             # running flag is never cleared (guards against worker crash edge cases).
             deadline = time.time() + 7200
+            last_ping_time = time.time()
             try:
                 while time.time() < deadline:
                     with _dl_lock:
@@ -2888,7 +2953,18 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     self.wfile.flush()
                     if not snapshot["running"]:
                         break
+                    # SSE heartbeat ping every 30 s — keeps TCP alive and lets
+                    # the browser detect a stalled connection sooner via onerror.
+                    now = time.time()
+                    if now - last_ping_time >= 30:
+                        self.wfile.write(b'data: {"ping": true}\n\n')
+                        self.wfile.flush()
+                        last_ping_time = now
                     time.sleep(0.5)
+                else:
+                    # Deadline reached — check if worker process is still alive.
+                    # If not, reset running=False so next page load shows correct state.
+                    _check_stale_download_state()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # Client disconnected — download continues in background
 
@@ -2941,6 +3017,10 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 bandwidth_limit_mbps = None
             sync_s3: bool = bool(params.get("sync_s3", False))
 
+            # Repair stale state before checking running flag.
+            # Prevents "Download already running" error when a previous worker
+            # crashed without resetting the flag.
+            _check_stale_download_state()
             with _dl_lock:
                 if download_state["running"]:
                     self._send_json({"error": "Download already running"}, status=409)
@@ -3124,101 +3204,105 @@ def _download_worker(
         done_count = 0
         model_count = download_state["model_count"] or 1  # avoid div-by-zero
 
-        for raw_line in proc.stdout:  # type: ignore[union-attr]
-            line = raw_line.rstrip()
+        try:
+            for raw_line in proc.stdout:  # type: ignore[union-attr]
+                line = raw_line.rstrip()
 
-            # tqdm refreshes via carriage return — keep only the last (most recent) value
-            if "\r" in line:
-                line = line.rsplit("\r", 1)[-1].strip()
-            if not line:
-                continue
-
-            with _dl_lock:
-                if download_state["cancelled"]:
-                    break
-
-                # [PROGRESS] idx/total — model-level marker, don't add to log
-                if line.startswith("[PROGRESS]"):
-                    try:
-                        parts = line.split()[1].split("/")
-                        done_count = int(parts[0]) - 1
-                        model_count = int(parts[1])
-                        download_state["model_count"] = model_count
-                        download_state["done_count"] = done_count
-                        # Per-file progress starts at 0 until tqdm lines arrive
-                        base_pct = int(done_count * 100 / max(model_count, 1))
-                        download_state["progress"] = min(base_pct, 99)
-                    except (IndexError, ValueError):
-                        pass
+                # tqdm refreshes via carriage return — keep only the last (most recent) value
+                if "\r" in line:
+                    line = line.rsplit("\r", 1)[-1].strip()
+                if not line:
                     continue
 
-                # [FILESIZE] N — expected total bytes for current file (from HF metadata)
-                if line.startswith("[FILESIZE]"):
-                    continue  # informational only, don't add to log
-
-                # [FILEPROGRESS] current/total — file-size monitor (hf_xet has no tqdm)
-                if line.startswith("[FILEPROGRESS]"):
-                    try:
-                        cur_s, tot_s = line.split()[1].split("/")
-                        cur_b, tot_b = int(cur_s), int(tot_s)
-                        if tot_b > 0:
-                            _mc = max(model_count, 1)
-                            file_pct = int(cur_b * 100 / tot_b)
-                            base_pct = int(done_count * 100 / _mc)
-                            slice_pct = int(100 / _mc)
-                            scaled = base_pct + int(file_pct * slice_pct / 100)
-                            download_state["progress"] = min(scaled, 99)
-                    except (IndexError, ValueError):
-                        pass
-                    continue  # don't add to log
-
-                # tqdm per-file progress line: "  52%|████..." → extract file %
-                # (fallback for non-xet backends that do emit tqdm)
-                m = _tqdm_re.match(line)
-                if m:
-                    file_pct = int(m.group(1))   # 0-100 within current file
-                    _mc = max(model_count, 1)
-                    # Scale file progress into the slice for this model: [base, base+slice)
-                    base_pct = int(done_count * 100 / _mc)
-                    slice_pct = int(100 / _mc)
-                    scaled = base_pct + int(file_pct * slice_pct / 100)
-                    download_state["progress"] = min(scaled, 99)
-                    continue  # don't add tqdm lines to log
-
-                download_state["log"].append(line)
-                if len(download_state["log"]) > 500:
-                    download_state["log"] = download_state["log"][-400:]
-
-                # Parse model start: lines like "[ModelName]" from download_models.py
-                if (line.startswith("[") and line.endswith("]")
-                        and not any(line.startswith(p) for p in (
-                            "[INFO]", "[WARN]", "[ERR", "[DOWNLOAD", "[SKIP", "[OK", "[FATAL", "[WORKER"))):
-                    download_state["current"] = line[1:-1]
-
-                # Parse result lines → advance done_count and progress
-                for marker, status_key in (("[OK]", "DOWNLOAD"), ("[SKIP]", "SKIP"), ("[ERR]", "ERROR")):
-                    if f"  {marker}" in line or line.startswith(marker):
-                        cur = download_state["current"]
-                        if cur:
-                            download_state["status_map"][cur] = status_key
-                        done_count += 1
-                        download_state["done_count"] = done_count
-                        _mc = download_state["model_count"] or 1
-                        pct = int(done_count * 100 / _mc)
-                        download_state["progress"] = min(pct, 99)
+                with _dl_lock:
+                    if download_state["cancelled"]:
                         break
 
-        rc = proc.wait()
-        with _dl_lock:
-            if rc != 0 and not download_state["cancelled"]:
-                download_state["log"].append(f"[WORKER] download_models.py завершился с кодом {rc}")
-            download_state["running"] = False
-            download_state["progress"] = 100
-            download_state["process"] = None
+                    # [PROGRESS] idx/total — model-level marker, don't add to log
+                    if line.startswith("[PROGRESS]"):
+                        try:
+                            parts = line.split()[1].split("/")
+                            done_count = int(parts[0]) - 1
+                            model_count = int(parts[1])
+                            download_state["model_count"] = model_count
+                            download_state["done_count"] = done_count
+                            # Per-file progress starts at 0 until tqdm lines arrive
+                            base_pct = int(done_count * 100 / max(model_count, 1))
+                            download_state["progress"] = min(base_pct, 99)
+                        except (IndexError, ValueError):
+                            pass
+                        continue
 
-    except Exception as exc:
+                    # [FILESIZE] N — expected total bytes for current file (from HF metadata)
+                    if line.startswith("[FILESIZE]"):
+                        continue  # informational only, don't add to log
+
+                    # [FILEPROGRESS] current/total — file-size monitor (hf_xet has no tqdm)
+                    if line.startswith("[FILEPROGRESS]"):
+                        try:
+                            cur_s, tot_s = line.split()[1].split("/")
+                            cur_b, tot_b = int(cur_s), int(tot_s)
+                            if tot_b > 0:
+                                _mc = max(model_count, 1)
+                                file_pct = int(cur_b * 100 / tot_b)
+                                base_pct = int(done_count * 100 / _mc)
+                                slice_pct = int(100 / _mc)
+                                scaled = base_pct + int(file_pct * slice_pct / 100)
+                                download_state["progress"] = min(scaled, 99)
+                        except (IndexError, ValueError):
+                            pass
+                        continue  # don't add to log
+
+                    # tqdm per-file progress line: "  52%|████..." → extract file %
+                    # (fallback for non-xet backends that do emit tqdm)
+                    m = _tqdm_re.match(line)
+                    if m:
+                        file_pct = int(m.group(1))   # 0-100 within current file
+                        _mc = max(model_count, 1)
+                        # Scale file progress into the slice for this model: [base, base+slice)
+                        base_pct = int(done_count * 100 / _mc)
+                        slice_pct = int(100 / _mc)
+                        scaled = base_pct + int(file_pct * slice_pct / 100)
+                        download_state["progress"] = min(scaled, 99)
+                        continue  # don't add tqdm lines to log
+
+                    download_state["log"].append(line)
+                    if len(download_state["log"]) > 500:
+                        download_state["log"] = download_state["log"][-400:]
+
+                    # Parse model start: lines like "[ModelName]" from download_models.py
+                    if (line.startswith("[") and line.endswith("]")
+                            and not any(line.startswith(p) for p in (
+                                "[INFO]", "[WARN]", "[ERR", "[DOWNLOAD", "[SKIP", "[OK", "[FATAL", "[WORKER"))):
+                        download_state["current"] = line[1:-1]
+
+                    # Parse result lines → advance done_count and progress
+                    for marker, status_key in (("[OK]", "DOWNLOAD"), ("[SKIP]", "SKIP"), ("[ERR]", "ERROR")):
+                        if f"  {marker}" in line or line.startswith(marker):
+                            cur = download_state["current"]
+                            if cur:
+                                download_state["status_map"][cur] = status_key
+                            done_count += 1
+                            download_state["done_count"] = done_count
+                            _mc = download_state["model_count"] or 1
+                            pct = int(done_count * 100 / _mc)
+                            download_state["progress"] = min(pct, 99)
+                            break
+
+            rc = proc.wait()
+            with _dl_lock:
+                if rc != 0 and not download_state["cancelled"]:
+                    download_state["log"].append(f"[WORKER] download_models.py завершился с кодом {rc}")
+                download_state["progress"] = 100
+
+        except Exception as exc:
+            with _dl_lock:
+                download_state["log"].append(f"[WORKER ERROR] {exc}")
+
+    finally:
+        # Always reset running state regardless of how the worker exits
+        # (normal completion, exception, KeyboardInterrupt, SystemExit, etc.)
         with _dl_lock:
-            download_state["log"].append(f"[WORKER ERROR] {exc}")
             download_state["running"] = False
             download_state["process"] = None
 
