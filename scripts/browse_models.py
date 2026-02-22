@@ -192,6 +192,26 @@ def to_yaml_snippet(models: list, file_map: dict[str, list[str]]) -> str:
     return yaml.dump(entries, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def _fmt_pulls(n: int) -> str:
+    """Format pull count: 1_500_000 → '1.5M', 13_400 → '13.4K', 234 → '234'."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n) if n else "-"
+
+
+def _fmt_size(n: int) -> str:
+    """Format byte size: 5_000_000_000 → '4.7 GB', 512_000_000 → '488 MB'."""
+    if not n:
+        return "-"
+    if n >= 1024 ** 3:
+        return f"{n / 1024**3:.1f} GB"
+    if n >= 1024 ** 2:
+        return f"{n / 1024**2:.0f} MB"
+    return f"{n / 1024:.0f} KB"
+
+
 def print_ollama_table(results: list[dict]) -> None:
     """Выводит таблицу результатов поиска Ollama."""
     if not results:
@@ -199,18 +219,18 @@ def print_ollama_table(results: list[dict]) -> None:
         return
 
     print(
-        f"\n{'#':<4}  {'MODEL TAG':<42}  {'PARAMS':<10}  {'QUANT':<16}  {'PULLS':>8}  DESCRIPTION"
+        f"\n{'#':<4}  {'MODEL TAG':<36}  {'PULLS':>7}  {'SIZE (latest)':>13}  {'TAGS':>5}  {'CAPS':<14}  DESCRIPTION"
     )
-    print("-" * 120)
+    print("-" * 130)
     for i, m in enumerate(results, 1):
-        tag = str(m.get("model_tag", ""))[:42]
-        params = str(m.get("params", "") or "")[:10]
-        quant = str(m.get("quantization", "") or "")[:16]
-        pulls = int(m.get("pulls", 0) or 0)
-        desc = str(m.get("description", "") or "")
-        desc_short = desc[:50] + "..." if len(desc) > 50 else desc
-        pulls_str = f"{pulls:,}" if pulls else "-"
-        print(f"{i:<4}  {tag:<42}  {params:<10}  {quant:<16}  {pulls_str:>8}  {desc_short}")
+        tag       = str(m.get("model_tag", ""))[:36]
+        pulls     = _fmt_pulls(int(m.get("pulls", 0) or 0))
+        size      = _fmt_size(int(m.get("size", 0) or 0))
+        tag_count = str(m.get("tag_count", 0) or 0)
+        caps      = str(m.get("params", "") or "")[:14]
+        desc      = str(m.get("description", "") or "")
+        desc_short = desc[:55] + "…" if len(desc) > 55 else desc
+        print(f"{i:<4}  {tag:<36}  {pulls:>7}  {size:>13}  {tag_count:>5}  {caps:<14}  {desc_short}")
     print(f"\nНайдено: {len(results)} моделей\n")
 
 

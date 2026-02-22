@@ -3047,14 +3047,25 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                             tag_part = "latest"
                             filename = f"{model_name}.gguf"
 
+                        # File size from parallel OCI manifest fetch (0 = unavailable)
+                        size_bytes_raw = int(m.get("size", 0) or 0)
+                        size_bytes = size_bytes_raw if size_bytes_raw > 0 else None
+
+                        # Capability tags (tools, vision, cloud…) + tag count badge
+                        capability = str(m.get("params", "") or "")
+                        tag_count = int(m.get("tag_count", 0) or 0)
+                        tags_list = [t.strip() for t in capability.split(",") if t.strip()]
+                        if tag_count:
+                            tags_list.append(f"{tag_count} variants")
+
                         normalized.append({
                             "repo_id": f"ollama/{model_name}",
                             "downloads": int(m.get("pulls", 0) or 0),
                             "likes": 0,
                             "gated": False,
                             "pipeline_tag": "",
-                            "tags": [t for t in [m.get("params"), m.get("quantization")] if t],
-                            "files": [{"name": filename, "size_bytes": None}],
+                            "tags": tags_list,
+                            "files": [{"name": filename, "size_bytes": size_bytes}],
                             "description": str(m.get("description", "") or ""),
                             "license": "",
                             # Ollama-specific fields for the add form

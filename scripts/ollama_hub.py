@@ -245,77 +245,123 @@ def get_model_info(model_tag: str) -> dict:
 # ─── Search ───────────────────────────────────────────────────────────────────
 
 
+def _parse_count(text: str) -> int:
+    """
+    Parse Ollama pull-count strings into integers.
+
+    Examples:
+      '13.4K'  → 13_400
+      '1.2M'   → 1_200_000
+      '234'    → 234
+      '1,234'  → 1234
+    """
+    text = text.strip().replace(",", "")
+    multipliers = {"K": 1_000, "M": 1_000_000, "B": 1_000_000_000}
+    try:
+        suffix = text[-1].upper()
+        if suffix in multipliers:
+            return int(float(text[:-1]) * multipliers[suffix])
+        return int(float(text))
+    except (ValueError, IndexError):
+        return 0
+
+
 def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
     """
-    Scrape model entries from ollama.com/search HTML.
+    Parse model cards from ollama.com/search HTML.
 
-    Looks for data attributes or common class patterns. Ollama's HTML uses
-    a structured list of model cards with name, description, pulls, params info.
+    Ollama's search page (Go/HTMX) renders model cards as:
+      <li x-test-model ...>
+        <a href="/library/<model>" ...>
+          <span x-test-search-response-title>model_name</span>
+          <p class="max-w-lg break-words ...">description text</p>
+          <span x-test-pull-count>13.4K</span>
+          <span x-test-tag-count>12</span>
+          <span class="...bg-cyan-50...">tools</span>  <!-- capability badges -->
+        </a>
+      </li>
 
-    Returns list of dicts with: model_tag, description, pulls, params, quantization.
-    Falls back to empty list if parsing fails.
+    Strategy:
+      1. Find each <li x-test-model>...</li> block to isolate model cards.
+      2. Within each card, use targeted regex to extract structured data.
+      3. Fallback: bare href regex (no metadata) if card isolation fails.
+
+    Returns list[dict] with keys:
+      model_tag, description, pulls, params (capability tags), quantization, tag_count
     """
-    results = []
+    results: list[dict] = []
 
-    # Ollama search page uses Next.js / React; model data is often in JSON
-    # embedded in <script id="__NEXT_DATA__"> or as data attributes.
-    # Try __NEXT_DATA__ first (most reliable).
-    next_data_match = re.search(
-        r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
-        html, re.DOTALL
-    )
-    if next_data_match:
-        try:
-            data = json.loads(next_data_match.group(1))
-            # Navigate to search results in Next.js page props
-            page_props = (
-                data.get("props", {})
-                .get("pageProps", {})
-            )
-            # Try common paths for search results
-            models_data = (
-                page_props.get("models")
-                or page_props.get("results")
-                or page_props.get("data", {}).get("models")
-                or []
-            )
-            if isinstance(models_data, list):
-                for m in models_data[:limit]:
-                    if not isinstance(m, dict):
-                        continue
-                    name = m.get("name") or m.get("model") or ""
-                    tag_val = m.get("tagName") or m.get("tag") or "latest"
-                    model_tag = f"{name}:{tag_val}" if tag_val != "latest" else name
-                    results.append({
-                        "model_tag": model_tag,
-                        "description": str(m.get("description") or ""),
-                        "pulls": int(m.get("pullCount") or m.get("pulls") or 0),
-                        "params": str(m.get("parameterSize") or m.get("params") or ""),
-                        "quantization": str(m.get("quantizationLevel") or m.get("quantization") or ""),
-                    })
-                if results:
-                    return results
-        except Exception:
-            pass  # Fall through to HTML scraping
+    # ── Primary: isolate model cards by <li x-test-model> blocks ─────────────
+    # Each card is a <li x-test-model ...>...</li> without nested <li> elements.
+    cards = re.findall(r'<li\s+x-test-model[^>]*>(.*?)</li>', html, re.DOTALL)
 
-    # Fallback: HTML pattern matching restricted to /library/<modelname> hrefs only.
-    # Ollama model pages are always under /library/ — bare paths like /pricing,
-    # /signin, /icon-16x16.png are navigation/static assets and must be excluded.
-    # The pattern requires the /library/ prefix and a model name that:
-    #   - starts with a lowercase letter or digit
-    #   - contains only lowercase letters, digits, dots, hyphens (e.g. llama3.2, phi3.5)
-    #   - is at least 2 characters after the first character
-    # A lookahead asserts the name ends at a path separator, query, fragment, or quote.
-    model_name_pattern = re.compile(
-        r'href=["\'](?:https://ollama\.com)?/library/([a-z][a-z0-9._-]{1,})(?=[/"\'#?])',
-    )
+    if cards:
+        for card in cards[:limit]:
+            # Model name from href="/library/<model>"
+            href_m = re.search(
+                r'href=["\'](?:https://ollama\.com)?/library/([a-z][a-z0-9._-]+)["\']',
+                card,
+            )
+            if not href_m:
+                continue
+            model_name = href_m.group(1)
+
+            # Description from <p class="max-w-lg break-words ...">...</p>
+            desc_m = re.search(
+                r'<p[^>]*\bmax-w-lg\b[^>]*\bbreak-words\b[^>]*>(.*?)</p>',
+                card, re.DOTALL
+            )
+            description = ""
+            if desc_m:
+                # Strip any embedded HTML tags, then decode HTML entities
+                import html as _html
+                raw_desc = re.sub(r'<[^>]+>', '', desc_m.group(1)).strip()
+                description = _html.unescape(raw_desc)
+
+            # Pull count from <span x-test-pull-count>13.4K</span>
+            pull_m = re.search(
+                r'x-test-pull-count[^>]*>\s*([\d.,]+\s*[KMBkmb]?)\s*<',
+                card,
+            )
+            pulls = _parse_count(pull_m.group(1)) if pull_m else 0
+
+            # Tag count from <span x-test-tag-count>12</span>
+            tag_count_m = re.search(r'x-test-tag-count[^>]*>\s*(\d+)\s*<', card)
+            tag_count = int(tag_count_m.group(1)) if tag_count_m else 0
+
+            # Capability badges from cyan-coloured spans (tools, vision, cloud, etc.)
+            capability_tags = re.findall(
+                r'<span[^>]+bg-cyan-\d+[^>]*>\s*([^<]{2,30}?)\s*</span>',
+                card,
+            )
+            # Also look for other colored badge spans (some models use teal/green)
+            capability_tags += re.findall(
+                r'<span[^>]+bg-(?:teal|green|emerald|sky)-\d+[^>]*>\s*([^<]{2,30}?)\s*</span>',
+                card,
+            )
+
+            results.append({
+                "model_tag": model_name,
+                "description": description,
+                "pulls": pulls,
+                "params": ", ".join(capability_tags) if capability_tags else "",
+                "quantization": "",
+                "tag_count": tag_count,
+                "size": 0,  # filled in by _fetch_sizes_parallel
+            })
+
+        if results:
+            return results
+
+    # ── Fallback: href regex (names only, no metadata) ────────────────────────
+    # Used when card isolation fails (e.g. site restructure).
     seen: set[str] = set()
-    for m in model_name_pattern.finditer(html):
+    for m in re.finditer(
+        r'href=["\'](?:https://ollama\.com)?/library/([a-z][a-z0-9._-]{1,})(?=[/"\'#?])',
+        html,
+    ):
         name = m.group(1)
-        # Skip names that look like file paths (contain a dot followed by an extension)
-        if re.search(r'\.[a-z]{2,4}$', name):
-            continue
-        if name in seen:
+        if re.search(r'\.[a-z]{2,4}$', name) or name in seen:
             continue
         seen.add(name)
         results.append({
@@ -324,6 +370,8 @@ def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
             "pulls": 0,
             "params": "",
             "quantization": "",
+            "tag_count": 0,
+            "size": 0,
         })
         if len(results) >= limit:
             break
@@ -334,8 +382,8 @@ def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
 def _fetch_top_models_fallback(limit: int, session) -> list[dict]:
     """
     Fallback: fetch top models from ollama.com/api/tags.
-    Called when HTML scraping fails or returns 0 results (R4 mitigation).
-    Returns list[dict] in same format as search_models.
+    Called when HTML scraping returns 0 results (R4 mitigation).
+    Returns list[dict] in the same format as search_models.
     """
     try:
         resp = session.get(_TAGS_URL, timeout=15)
@@ -352,6 +400,8 @@ def _fetch_top_models_fallback(limit: int, session) -> list[dict]:
                     "pulls": 0,
                     "params": "",
                     "quantization": "",
+                    "tag_count": 0,
+                    "size": 0,
                 })
             elif isinstance(m, str):
                 results.append({
@@ -360,6 +410,8 @@ def _fetch_top_models_fallback(limit: int, session) -> list[dict]:
                     "pulls": 0,
                     "params": "",
                     "quantization": "",
+                    "tag_count": 0,
+                    "size": 0,
                 })
         return results
     except Exception as exc:
@@ -370,26 +422,77 @@ def _fetch_top_models_fallback(limit: int, session) -> list[dict]:
         return []
 
 
+def _fetch_sizes_parallel(model_names: list[str], timeout: int = 20) -> dict[str, int]:
+    """
+    Fetch GGUF file sizes for models by fetching OCI manifests in parallel.
+
+    For each model, fetches registry.ollama.ai/v2/library/<model>/manifests/latest
+    and reads the 'size' field of the GGUF layer blob. This is a lightweight
+    manifest-only request (JSON, ~1KB), NOT a download of the actual GGUF file.
+
+    Returns dict mapping model_name → size_bytes (0 if unavailable).
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    if not model_names:
+        return {}
+
+    def _fetch_one(name: str) -> tuple[str, int]:
+        try:
+            manifest = get_manifest(name, "latest", "library")
+            return name, int(manifest.get("size", 0) or 0)
+        except Exception:
+            return name, 0
+
+    results: dict[str, int] = {}
+    max_workers = min(len(model_names), 8)
+    try:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_fetch_one, name): name for name in model_names}
+            for future in as_completed(futures, timeout=timeout):
+                try:
+                    name, size = future.result(timeout=5)
+                    if size:
+                        results[name] = size
+                except Exception:
+                    pass
+    except Exception:
+        pass  # TimeoutError from as_completed — return partial results
+
+    return results
+
+
 def search_models(query: Optional[str] = None, limit: int = 20) -> list[dict]:
     """
     Search Ollama models.
 
-    Primary: GET https://ollama.com/search?q={query} — HTML scraping.
-    Fallback (R4): if HTML parse fails or returns 0 results,
-                   try GET https://ollama.com/api/tags.
+    Primary: GET https://ollama.com/search?q={query} — HTML card parsing.
+    Fallback: /api/tags for top models when HTML yields no results.
+
+    After getting model names, fetches OCI manifests in parallel to get
+    the GGUF file size (latest variant) for each model.
 
     Returns list[dict] with keys:
-      model_tag (str): e.g. 'llama3.2' or 'llama3.2:8b-instruct-q4_K_M'
-      description (str): model description
-      pulls (int): download count (0 if unavailable)
-      params (str): parameter size (e.g. '8B')
-      quantization (str): quantization level (e.g. 'Q4_K_M')
+      model_tag (str):    e.g. 'llama3.2'
+      description (str):  model description
+      pulls (int):        download count
+      params (str):       capability tags (tools, vision, cloud, …)
+      quantization (str): quantization level (empty — resolved per-tag, not globally)
+      tag_count (int):    number of available tags/variants
+      size (int):         GGUF file size in bytes for the :latest variant (0 if unknown)
     """
     session = _get_session()
+    # Use a browser-like UA to avoid bot-detection on the search page
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
+    })
     results: list[dict] = []
 
     try:
-        params = {}
+        params: dict = {}
         if query:
             params["q"] = query
         resp = session.get(_SEARCH_URL, params=params, timeout=15)
@@ -405,7 +508,16 @@ def search_models(query: Optional[str] = None, limit: int = 20) -> list[dict]:
     if not results:
         results = _fetch_top_models_fallback(limit, session)
 
-    return results[:limit]
+    results = results[:limit]
+
+    # Fetch file sizes from OCI registry in parallel (best-effort)
+    if results:
+        model_names = [r["model_tag"] for r in results if r.get("model_tag")]
+        sizes = _fetch_sizes_parallel(model_names)
+        for r in results:
+            r["size"] = sizes.get(r["model_tag"], 0)
+
+    return results
 
 
 # ─── ETag / Digest Sidecar ────────────────────────────────────────────────────
