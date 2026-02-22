@@ -52,6 +52,14 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import fmt_size, load_hf_token  # noqa: E402
 
+# Ollama hub (optional — server starts even if ollama_hub is unavailable)
+try:
+    import ollama_hub as _ollama_hub
+    _OLLAMA_AVAILABLE = True
+except ImportError:
+    _ollama_hub = None  # type: ignore[assignment]
+    _OLLAMA_AVAILABLE = False
+
 
 # ─── S3 Config (minimal, for delete operations) ────────────────────────────────
 
@@ -340,6 +348,19 @@ HTML_PAGE = r"""<!DOCTYPE html>
     border: 1px solid #0369a1; border-radius: 3px; padding: 1px 5px;
     font-size: 0.6rem; font-weight: 700; margin-left: 4px; vertical-align: middle;
     letter-spacing: 0.04em; cursor: default;
+  }
+  /* Source badges: HF (blue) and OLLAMA (orange) */
+  .badge-hf {
+    display: inline-block; background: #1e3a5f; color: #93c5fd;
+    border: 1px solid #2563eb; border-radius: 3px; padding: 1px 4px;
+    font-size: 0.6rem; font-weight: 700; margin-left: 4px; vertical-align: middle;
+    letter-spacing: 0.03em; cursor: default;
+  }
+  .badge-ollama {
+    display: inline-block; background: #431407; color: #fdba74;
+    border: 1px solid #c2410c; border-radius: 3px; padding: 1px 4px;
+    font-size: 0.6rem; font-weight: 700; margin-left: 4px; vertical-align: middle;
+    letter-spacing: 0.03em; cursor: default;
   }
   .enabled-cb { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer; }
   #empty-msg { text-align: center; color: #5a6a82; padding: 40px; font-size: 0.9rem; }
@@ -773,10 +794,17 @@ HTML_PAGE = r"""<!DOCTYPE html>
       <!-- Строка 1: основные поля поиска -->
       <div class="hf-search-row">
         <div class="hf-field">
+          <label>Источник</label>
+          <select id="hf-source" onchange="onSourceChange()" style="width:160px">
+            <option value="huggingface">HuggingFace</option>
+            <option value="ollama">Ollama</option>
+          </select>
+        </div>
+        <div class="hf-field">
           <label>Запрос</label>
           <input type="text" id="hf-query" placeholder="llama, qwen, deepseek..." onkeydown="if(event.key==='Enter')hfSearch()">
         </div>
-        <div class="hf-field">
+        <div class="hf-field" id="hf-author-field">
           <label>Автор</label>
           <input type="text" id="hf-author" placeholder="bartowski, unsloth..." onkeydown="if(event.key==='Enter')hfSearch()">
         </div>
@@ -1074,8 +1102,17 @@ function renderModelRow(m, i) {
   }
 
   const tdName = document.createElement('td');
+  // Source badge: HF (blue) or OLLAMA (orange)
+  const isOllama = m.source === 'ollama';
+  const sourceBadge = isOllama
+    ? '<span class="badge-ollama" title="Скачивается с Ollama registry">OLLAMA</span>'
+    : '<span class="badge-hf" title="Скачивается с HuggingFace">HF</span>';
+  // For Ollama entries, link to ollama.com; for HF, link to huggingface.co
+  const repoLink = isOllama
+    ? `<a href="https://ollama.com/library/${escHtml(m.ollama_model ? m.ollama_model.split(':')[0] : m.repo_id.replace('ollama/',''))}" target="_blank">${escHtml(m.repo_id)}</a>`
+    : `<a href="https://huggingface.co/${escHtml(m.repo_id)}" target="_blank">${escHtml(m.repo_id)}</a>`;
   tdName.innerHTML =
-    `<div class="cell-repo"><a href="https://huggingface.co/${escHtml(m.repo_id)}" target="_blank">${escHtml(m.repo_id)}</a>${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
+    `<div class="cell-repo">${repoLink}${sourceBadge}${m.gated ? '<span class="gated-badge">GATED</span>' : ''}</div>` +
     `<div class="cell-filename">${escHtml(m.filename)}</div>`;
 
   const tdTags = document.createElement('td');
@@ -1546,7 +1583,20 @@ function toggleLangChip(chip) {
 let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
 
+function onSourceChange() {
+  const source = document.getElementById('hf-source').value;
+  const isOllama = source === 'ollama';
+  // Hide HF-specific fields when Ollama source is selected
+  const authorField = document.getElementById('hf-author-field');
+  if (authorField) authorField.style.display = isOllama ? 'none' : '';
+  const pipelineField = document.getElementById('hf-pipeline-tag');
+  if (pipelineField) pipelineField.closest('.hf-field').style.display = isOllama ? 'none' : '';
+  const filtersRow = document.querySelector('.hf-filters-row');
+  if (filtersRow) filtersRow.style.display = isOllama ? 'none' : '';
+}
+
 async function hfSearch() {
+  const source      = document.getElementById('hf-source') ? document.getElementById('hf-source').value : 'huggingface';
   const q           = document.getElementById('hf-query').value.trim();
   const author      = document.getElementById('hf-author').value.trim();
   const fileRegex   = document.getElementById('hf-file-regex').value.trim();
@@ -1555,13 +1605,21 @@ async function hfSearch() {
   const language    = activeLangChip ? activeLangChip.dataset.lang : '';
   const limit       = Math.min(50, Math.max(1, parseInt(document.getElementById('hf-limit').value) || 20));
 
-  if (!q && !author && !fileRegex && !pipelineTag && !language) {
+  const isOllama = source === 'ollama';
+
+  if (!isOllama && !q && !author && !fileRegex && !pipelineTag && !language) {
     setHfStatus('Укажите хотя бы один параметр поиска', true);
     return;
   }
 
-  // Validate regex before sending to server
-  if (fileRegex && !onRegexInput()) {
+  // For Ollama, require at least a query
+  if (isOllama && !q) {
+    setHfStatus('Введите запрос для поиска на Ollama', true);
+    return;
+  }
+
+  // Validate regex before sending to server (only for HF)
+  if (!isOllama && fileRegex && !onRegexInput()) {
     setHfStatus('Исправьте regex перед поиском', true);
     return;
   }
@@ -1574,14 +1632,18 @@ async function hfSearch() {
   document.getElementById('hf-results-wrapper').style.display = 'none';
 
   const params = new URLSearchParams();
+  params.set('source', source);
   if (q) params.set('q', q);
-  if (author) params.set('author', author);
-  if (fileRegex) params.set('file_regex', fileRegex);
-  if (pipelineTag) params.set('pipeline_tag', pipelineTag);
-  if (language) params.set('language', language);
+  if (!isOllama) {
+    if (author) params.set('author', author);
+    if (fileRegex) params.set('file_regex', fileRegex);
+    if (pipelineTag) params.set('pipeline_tag', pipelineTag);
+    if (language) params.set('language', language);
+  }
   params.set('limit', limit);
 
-  setHfStatus('<span class="spinner"></span>&nbsp;Поиск на HuggingFace...', false);
+  const sourceLabel = isOllama ? 'Ollama' : 'HuggingFace';
+  setHfStatus(`<span class="spinner"></span>&nbsp;Поиск на ${sourceLabel}...`, false);
 
   try {
     const resp = await fetch('/api/search?' + params.toString());
@@ -1696,7 +1758,13 @@ function renderHfResults(results) {
 function hfSelectionChange(cb, r, fname) {
   const key = r.repo_id + '||' + (fname || '');
   if (cb.checked) {
-    hfSelected.set(key, { repo_id: r.repo_id, filename: fname || '', gated: r.gated, tags: r.tags || [], description: r.description || '', pipeline_tag: r.pipeline_tag || '' });
+    hfSelected.set(key, {
+      repo_id: r.repo_id, filename: fname || '', gated: r.gated,
+      tags: r.tags || [], description: r.description || '',
+      pipeline_tag: r.pipeline_tag || '',
+      source: r.source || 'huggingface',
+      ollama_model: r.ollama_model || '',
+    });
   } else {
     hfSelected.delete(key);
   }
@@ -1716,7 +1784,13 @@ function hfToggleAll(masterCb) {
     const r = hfResults.find(x => x.repo_id === repo_id);
     if (!r) return;
     if (masterCb.checked) {
-      hfSelected.set(key, { repo_id, filename: fname, gated: r.gated, tags: r.tags || [], description: r.description || '', pipeline_tag: r.pipeline_tag || '' });
+      hfSelected.set(key, {
+        repo_id, filename: fname, gated: r.gated,
+        tags: r.tags || [], description: r.description || '',
+        pipeline_tag: r.pipeline_tag || '',
+        source: r.source || 'huggingface',
+        ollama_model: r.ollama_model || '',
+      });
     } else {
       hfSelected.delete(key);
     }
@@ -1890,13 +1964,19 @@ async function hfConfirmAdd() {
       return;
     }
     const tagsRaw = tr.querySelector('.add-tags').value.trim();
-    models.push({
+    const modelEntry = {
       repo_id: item.repo_id, filename: item.filename,
       enabled, gated: item.gated,
       dest_dir:    tr.querySelector('.add-dest-dir').value.trim() || 'misc',
       tags:        tagsRaw ? tagsRaw.split(/\s+/).filter(Boolean) : [],
       description: tr.querySelector('.add-description').value.trim(),
-    });
+    };
+    // Carry source/ollama_model for Ollama entries
+    if (item.source === 'ollama') {
+      modelEntry.source = 'ollama';
+      if (item.ollama_model) modelEntry.ollama_model = item.ollama_model;
+    }
+    models.push(modelEntry);
   }
   if (models.length === 0) {
     setAddStatus('Нет моделей для добавления', true);
@@ -2270,6 +2350,9 @@ def get_models_json(config_path: Path) -> list[dict]:
             # s3_available: True only when both s3_synced flag and s3_key are set.
             # Used by the delete modal to enable/disable S3 scope options.
             "s3_available": bool(item.get("s3_synced", False)) and bool(item.get("s3_key", "")),
+            # Source info for badge display (HF / OLLAMA)
+            "source": str(item.get("source", "huggingface") or "huggingface"),
+            "ollama_model": str(item.get("ollama_model", "") or ""),
         })
 
     return result
@@ -2284,6 +2367,10 @@ _DEST_DIR_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*){0,2}$")
 
 # Allowed: author/model-name  (HuggingFace standard)
 _REPO_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.\-]+$")
+
+# Allowed Ollama model tags: model[:tag] or user/model[:tag]
+# Examples: 'llama3.2', 'llama3.2:8b-instruct-q4_K_M', 'user/model:tag'
+_OLLAMA_TAG_RE = re.compile(r"^[\w.\-]+(\/[\w.\-]+)?(:([\w.\-]+))?$")
 
 
 def _validate_dest_dir(dest_dir: str, models_dir: Optional[Path] = None) -> None:
@@ -2552,13 +2639,28 @@ def add_models_to_yaml(
     for item in new_models:
         repo_id = str(item.get("repo_id", "")).strip()
         filename = str(item.get("filename", "")).strip()
+        source = str(item.get("source", "huggingface") or "huggingface").strip()
+        ollama_model = str(item.get("ollama_model", "") or "").strip()
+
         if not repo_id or not filename:
             continue
 
         # Server-side validation (client JS can be bypassed via curl/API)
-        if not _REPO_ID_RE.match(repo_id):
-            skipped.append(f"INVALID_REPO_ID:{repo_id}")
-            continue
+        if source == "ollama":
+            # R5: for Ollama entries, bypass _REPO_ID_RE (Ollama tags don't match author/model format)
+            # Validate ollama_model field instead with _OLLAMA_TAG_RE
+            if ollama_model and not _OLLAMA_TAG_RE.match(ollama_model):
+                skipped.append(f"INVALID_OLLAMA_MODEL:{ollama_model}")
+                continue
+            # repo_id for Ollama must start with 'ollama/' prefix (auto-set by UI/CLI)
+            if not repo_id.startswith("ollama/"):
+                # Normalize: if bare model name passed, prefix it
+                repo_id = f"ollama/{repo_id.lstrip('/')}"
+        else:
+            if not _REPO_ID_RE.match(repo_id):
+                skipped.append(f"INVALID_REPO_ID:{repo_id}")
+                continue
+
         if Path(filename).name != filename:
             skipped.append(f"INVALID_FILENAME:{filename}")
             continue
@@ -2590,6 +2692,12 @@ def add_models_to_yaml(
             "tags": tags,
             "description": str(item.get("description", "") or ""),
         }
+
+        # Persist source/ollama_model fields for Ollama entries
+        if source == "ollama":
+            entry["source"] = "ollama"
+            if ollama_model:
+                entry["ollama_model"] = ollama_model
 
         if "models" not in raw or raw["models"] is None:
             raw["models"] = []
@@ -2891,10 +2999,58 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             file_regex   = qs.get("file_regex", [None])[0] or None
             pipeline_tag = qs.get("pipeline_tag", [None])[0] or None
             language     = qs.get("language", [None])[0] or None
+            source       = qs.get("source", ["huggingface"])[0] or "huggingface"
             try:
                 limit = int(qs.get("limit", ["20"])[0])
             except (ValueError, TypeError):
                 limit = 20
+
+            # Ollama search: delegate to ollama_hub.search_models()
+            if source == "ollama":
+                if not _OLLAMA_AVAILABLE:
+                    self._send_json(
+                        {"error": "ollama_hub module not available", "results": []},
+                        status=503,
+                    )
+                    return
+                try:
+                    ollama_results = _ollama_hub.search_models(query=query, limit=limit)
+                    # Normalize to same shape expected by frontend:
+                    # repo_id, downloads, likes, gated, pipeline_tag, tags, files, description
+                    normalized = []
+                    for m in ollama_results:
+                        model_tag = str(m.get("model_tag", ""))
+                        # Derive repo_id and filename from model_tag
+                        if "/" in model_tag:
+                            _, rest = model_tag.split("/", 1)
+                        else:
+                            rest = model_tag
+                        if ":" in rest:
+                            model_name, tag_part = rest.split(":", 1)
+                            filename = f"{model_name}-{tag_part}.gguf"
+                        else:
+                            model_name = rest
+                            tag_part = "latest"
+                            filename = f"{model_name}.gguf"
+
+                        normalized.append({
+                            "repo_id": f"ollama/{model_name}",
+                            "downloads": int(m.get("pulls", 0) or 0),
+                            "likes": 0,
+                            "gated": False,
+                            "pipeline_tag": "",
+                            "tags": [t for t in [m.get("params"), m.get("quantization")] if t],
+                            "files": [{"name": filename, "size_bytes": None}],
+                            "description": str(m.get("description", "") or ""),
+                            "license": "",
+                            # Ollama-specific fields for the add form
+                            "source": "ollama",
+                            "ollama_model": model_tag,
+                        })
+                    self._send_json({"results": normalized, "count": len(normalized)})
+                except Exception as e:
+                    self._send_json({"error": str(e), "results": []}, status=500)
+                return
 
             try:
                 results = search_hf(
