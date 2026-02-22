@@ -18,7 +18,7 @@ API:
     GET  /api/settings            — текущие settings из models.yaml (concurrency, bandwidth, timeout)
     GET  /api/models              — список моделей с размерами файлов на диске
     POST /api/save                — обновить enabled в models.yaml атомарно
-    GET  /api/search?q=&author=&file_regex=&limit=  — поиск на HuggingFace Hub
+    GET  /api/search?q=&author=&file_regex=&limit=&source=  — поиск на HuggingFace / Ollama
     POST /api/add                 — добавить модели из результатов поиска в models.yaml
     POST /api/download/start      — запустить загрузку enabled моделей в фоновом потоке
     GET  /api/download/status     — текущий статус загрузки (running, current, progress, status_map)
@@ -705,7 +705,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
 
 <nav class="tabs">
   <button class="tab-btn active" data-tab="my-models" onclick="switchTab(this)">Мои модели</button>
-  <button class="tab-btn" data-tab="hf-search" onclick="switchTab(this)">Поиск HuggingFace</button>
+  <button class="tab-btn" data-tab="hf-search" onclick="switchTab(this)">Поиск</button>
 </nav>
 
 <!-- ═══════════════════════ TAB: Мои модели ═══════════════════════ -->
@@ -786,7 +786,7 @@ HTML_PAGE = r"""<!DOCTYPE html>
   </main>
 </div>
 
-<!-- ═══════════════════════ TAB: HuggingFace поиск ═══════════════════════ -->
+<!-- ═══════════════════════ TAB: Поиск моделей ════════════════════════════ -->
 <div id="tab-hf-search" class="tab-panel">
   <div class="hf-panel">
 
@@ -1577,7 +1577,7 @@ function toggleLangChip(chip) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Tab: Поиск HuggingFace
+//  Tab: Поиск моделей (HuggingFace / Ollama)
 // ═══════════════════════════════════════════════════════════════════
 
 let hfResults = [];
@@ -1596,7 +1596,7 @@ function onSourceChange() {
 }
 
 async function hfSearch() {
-  const source      = document.getElementById('hf-source') ? document.getElementById('hf-source').value : 'huggingface';
+  const source      = document.getElementById('hf-source').value;
   const q           = document.getElementById('hf-query').value.trim();
   const author      = document.getElementById('hf-author').value.trim();
   const fileRegex   = document.getElementById('hf-file-regex').value.trim();
@@ -1704,6 +1704,13 @@ function renderHfResults(results) {
         const tdRepo = document.createElement('td');
         tdRepo.className = 'cell-hf-repo';
         if (rawFiles.length > 1) tdRepo.rowSpan = rawFiles.length;
+        const isOllamaResult = r.source === 'ollama';
+        const repoHref = isOllamaResult
+          ? `https://ollama.com/library/${escHtml(r.ollama_model ? r.ollama_model.split(':')[0] : r.repo_id.replace('ollama/',''))}`
+          : `https://huggingface.co/${escHtml(r.repo_id)}`;
+        const resultSourceBadge = isOllamaResult
+          ? '<span class="badge-ollama" title="Ollama Registry">OLLAMA</span>'
+          : '';
         const pipelineBadge = r.pipeline_tag
           ? `<span class="hf-pipeline-badge">${escHtml(r.pipeline_tag)}</span>` : '';
         const likesHtml = r.likes > 0
@@ -1711,7 +1718,8 @@ function renderHfResults(results) {
         const descHtml = r.description
           ? `<span class="hf-desc">${escHtml(r.description)}</span>` : '';
         tdRepo.innerHTML =
-          `<a href="https://huggingface.co/${escHtml(r.repo_id)}" target="_blank">${escHtml(r.repo_id)}</a>` +
+          `<a href="${repoHref}" target="_blank">${escHtml(r.repo_id)}</a>` +
+          resultSourceBadge +
           (r.gated ? '<span class="gated-badge">GATED</span>' : '') +
           (pipelineBadge || likesHtml || descHtml
             ? `<div class="cell-hf-meta">${pipelineBadge}${likesHtml}${descHtml}</div>` : '');
@@ -2640,6 +2648,9 @@ def add_models_to_yaml(
         repo_id = str(item.get("repo_id", "")).strip()
         filename = str(item.get("filename", "")).strip()
         source = str(item.get("source", "huggingface") or "huggingface").strip()
+        # Whitelist: reject unknown source values rather than silently treating them as HF
+        if source not in ("huggingface", "ollama"):
+            source = "huggingface"
         ollama_model = str(item.get("ollama_model", "") or "").strip()
 
         if not repo_id or not filename:
@@ -3020,6 +3031,9 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     normalized = []
                     for m in ollama_results:
                         model_tag = str(m.get("model_tag", ""))
+                        # Skip entries with empty or invalid model_tag (can come from scraper)
+                        if not model_tag:
+                            continue
                         # Derive repo_id and filename from model_tag
                         if "/" in model_tag:
                             _, rest = model_tag.split("/", 1)

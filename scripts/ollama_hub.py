@@ -223,7 +223,15 @@ def get_model_info(model_tag: str) -> dict:
       size_str (str): human-readable size
 
     Reuses ProxyConfig/load_proxy_config() from utils.py for proxy-aware HTTP.
+
+    Raises:
+      ValueError: if model_tag format is invalid
     """
+    if not _OLLAMA_TAG_RE.match(model_tag):
+        raise ValueError(
+            f"Invalid Ollama model tag: {model_tag!r}. "
+            "Expected format: model, model:tag, or namespace/model:tag"
+        )
     namespace, model, tag = _parse_model_tag(model_tag)
     manifest = get_manifest(model, tag, namespace)
     return {
@@ -290,16 +298,24 @@ def _parse_ollama_search_html(html: str, limit: int) -> list[dict]:
         except Exception:
             pass  # Fall through to HTML scraping
 
-    # Fallback: basic HTML pattern matching for model names
-    # Ollama search results typically have model names in hrefs like /library/modelname
+    # Fallback: HTML pattern matching restricted to /library/<modelname> hrefs only.
+    # Ollama model pages are always under /library/ — bare paths like /pricing,
+    # /signin, /icon-16x16.png are navigation/static assets and must be excluded.
+    # The pattern requires the /library/ prefix and a model name that:
+    #   - starts with a lowercase letter or digit
+    #   - contains only lowercase letters, digits, dots, hyphens (e.g. llama3.2, phi3.5)
+    #   - is at least 2 characters after the first character
+    # A lookahead asserts the name ends at a path separator, query, fragment, or quote.
     model_name_pattern = re.compile(
-        r'href=["\'](?:https://ollama\.com)?/(?:library/|)([a-zA-Z0-9_.-]+(?:/[a-zA-Z0-9_.-]+)?)["\']',
-        re.IGNORECASE,
+        r'href=["\'](?:https://ollama\.com)?/library/([a-z][a-z0-9._-]{1,})(?=[/"\'#?])',
     )
     seen: set[str] = set()
     for m in model_name_pattern.finditer(html):
         name = m.group(1)
-        if name in seen or name in ("search", "library", "models", "tags", "blog", "docs"):
+        # Skip names that look like file paths (contain a dot followed by an extension)
+        if re.search(r'\.[a-z]{2,4}$', name):
+            continue
+        if name in seen:
             continue
         seen.add(name)
         results.append({
@@ -446,9 +462,15 @@ def download_model_gguf(
       Path to the downloaded GGUF file.
 
     Raises:
-      ValueError: on manifest parse errors (R1 mitigation)
+      ValueError: if model_tag format is invalid, or on manifest parse errors (R1 mitigation)
       requests.HTTPError: on non-200 HTTP responses
     """
+    if not _OLLAMA_TAG_RE.match(model_tag):
+        raise ValueError(
+            f"Invalid Ollama model tag: {model_tag!r}. "
+            "Expected format: model, model:tag, or namespace/model:tag"
+        )
+
     # Resolve destination path
     if dest_path.is_dir() or not dest_path.suffix:
         dest_path = dest_path / _safe_filename(model_tag)
