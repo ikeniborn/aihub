@@ -872,6 +872,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
         </div>
       </div>
+      <!-- Ollama capability filter — показывается динамически после поиска -->
+      <div id="ollama-caps-row" style="display:none;margin-top:6px">
+        <div class="hf-filter-group">
+          <label>Возможности</label>
+          <div class="filter-chips" id="ollama-caps-chips"></div>
+        </div>
+      </div>
     </div>
 
     <div id="hf-search-status"></div>
@@ -1593,6 +1600,9 @@ function onSourceChange() {
   if (pipelineField) pipelineField.closest('.hf-field').style.display = isOllama ? 'none' : '';
   const filtersRow = document.querySelector('.hf-filters-row');
   if (filtersRow) filtersRow.style.display = isOllama ? 'none' : '';
+  // Hide caps row until new search completes
+  const capsRow = document.getElementById('ollama-caps-row');
+  if (capsRow) capsRow.style.display = 'none';
 }
 
 async function hfSearch() {
@@ -1680,14 +1690,20 @@ function renderHfResults(results) {
   results.forEach(r => {
     // files is now [{name, size_bytes}, ...] or [] → normalise to [{name, size_bytes}] or [null]
     const rawFiles = r.files && r.files.length > 0 ? r.files : [null];
+    // For Ollama results: capability tags (excluding "N variants") stored as JSON for filtering
+    const ollamaCaps = r.source === 'ollama'
+      ? JSON.stringify((r.tags || []).filter(t => !/\d+\s+variants?/i.test(t)).map(t => t.toLowerCase()))
+      : null;
     rawFiles.forEach((fileObj, fi) => {
       const fname = fileObj ? (typeof fileObj === 'object' ? fileObj.name : fileObj) : null;
       const fsize = fileObj && typeof fileObj === 'object' ? fileObj.size_bytes : null;
       const key = r.repo_id + '||' + (fname || '');
       const tr = document.createElement('tr');
       tr.dataset.key = key;
-      // Store size_bytes on the row so the filter can read it
+      // Store size_bytes on the row so the size filter can read it
       if (fsize != null) tr.dataset.sizeBytes = fsize;
+      // Store capability tags on all rows of this result for Ollama cap filter
+      if (ollamaCaps !== null) tr.dataset.caps = ollamaCaps;
 
       // checkbox — не рендерим для строк без файла (нет смысла выбирать)
       const tdCb = document.createElement('td');
@@ -1759,8 +1775,82 @@ function renderHfResults(results) {
     });
   });
 
+  // For Ollama: rebuild capability chips for filtering
+  const isOllamaSearch = results.length > 0 && results[0].source === 'ollama';
+  if (isOllamaSearch) {
+    rebuildOllamaCapsChips(results);
+  } else {
+    const capsRow = document.getElementById('ollama-caps-row');
+    if (capsRow) capsRow.style.display = 'none';
+  }
+
   // Apply size filter after rendering
   hfApplySizeFilter();
+}
+
+// ── Ollama capability filter ────────────────────────────────────────────────
+
+function rebuildOllamaCapsChips(results) {
+  const row = document.getElementById('ollama-caps-row');
+  const chips = document.getElementById('ollama-caps-chips');
+  if (!row || !chips) return;
+
+  // Collect unique capability tags (exclude "N variants")
+  const capsSet = new Set();
+  results.forEach(r => {
+    (r.tags || []).forEach(t => {
+      if (!/^\d+\s+variants?$/i.test(t.trim())) capsSet.add(t.trim().toLowerCase());
+    });
+  });
+
+  if (capsSet.size === 0) { row.style.display = 'none'; return; }
+
+  chips.innerHTML = '';
+  // "Все" chip — clears filter
+  const allChip = document.createElement('span');
+  allChip.className = 'filter-chip active';
+  allChip.textContent = 'Все';
+  allChip.onclick = clearOllamaCaps;
+  chips.appendChild(allChip);
+
+  [...capsSet].sort().forEach(cap => {
+    const chip = document.createElement('span');
+    chip.className = 'filter-chip';
+    chip.dataset.cap = cap;
+    chip.textContent = cap;
+    chip.onclick = () => toggleOllamaCap(chip);
+    chips.appendChild(chip);
+  });
+
+  row.style.display = '';
+}
+
+function clearOllamaCaps() {
+  document.querySelectorAll('#ollama-caps-chips .filter-chip').forEach(c => {
+    c.classList.toggle('active', !c.dataset.cap); // активен только "Все"
+  });
+  applyOllamaCapsFilter();
+}
+
+function toggleOllamaCap(chip) {
+  chip.classList.toggle('active');
+  const anySpecific = [...document.querySelectorAll('#ollama-caps-chips .filter-chip[data-cap]')]
+    .some(c => c.classList.contains('active'));
+  const allChip = document.querySelector('#ollama-caps-chips .filter-chip:not([data-cap])');
+  if (allChip) allChip.classList.toggle('active', !anySpecific);
+  applyOllamaCapsFilter();
+}
+
+function applyOllamaCapsFilter() {
+  const activeCaps = [...document.querySelectorAll('#ollama-caps-chips .filter-chip[data-cap].active')]
+    .map(c => c.dataset.cap);
+  const tbody = document.getElementById('hf-results-body');
+  if (!tbody) return;
+  tbody.querySelectorAll('tr').forEach(tr => {
+    if (activeCaps.length === 0) { tr.style.display = ''; return; }
+    const rowCaps = JSON.parse(tr.dataset.caps || '[]');
+    tr.style.display = activeCaps.some(ac => rowCaps.includes(ac)) ? '' : 'none';
+  });
 }
 
 function hfSelectionChange(cb, r, fname) {

@@ -31,7 +31,6 @@ Progress markers (compatible with model_browser.py worker parser):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
@@ -606,6 +605,10 @@ def download_model_gguf(
         print(f"[FILESIZE] {expected_size}")
         sys.stdout.flush()
 
+    import os as _os
+
+    # Deterministic part file — survives crashes and enables resume
+    part_path = Path(str(dest_path) + ".part")
     session = _get_session()
     last_exc: Optional[Exception] = None
 
@@ -616,65 +619,84 @@ def download_model_gguf(
             else:
                 print(f"  Downloading {model_tag} from Ollama registry ...")
 
-            resp = session.get(manifest["url"], stream=True, timeout=(15, 300))
+            # Determine resume offset from existing part file
+            resume_from = 0
+            if part_path.is_file():
+                part_size = part_path.stat().st_size
+                if 0 < part_size < (expected_size or part_size + 1):
+                    resume_from = part_size
+                    pct = (resume_from * 100 // expected_size) if expected_size else 0
+                    print(
+                        f"  [RESUME] Found partial: {fmt_size(resume_from)} / "
+                        f"{fmt_size(expected_size or 0)} ({pct}%) — resuming"
+                    )
+                else:
+                    # Empty or oversized part file — start fresh
+                    part_path.unlink(missing_ok=True)
+
+            # Build request headers
+            req_headers: dict = {}
+            if resume_from > 0:
+                req_headers["Range"] = f"bytes={resume_from}-"
+
+            resp = session.get(
+                manifest["url"], stream=True, timeout=(15, 300), headers=req_headers
+            )
+
+            # Handle 416 Range Not Satisfiable — server says file is complete
+            if resp.status_code == 416:
+                if part_path.is_file():
+                    _os.replace(str(part_path), str(dest_path))
+                    _write_local_digest(dest_path, remote_digest)
+                    print(f"  [OK]   Saved to: {dest_path}  (range exhausted — file complete)")
+                    return dest_path
+                raise RuntimeError("Server returned 416 but no part file present")
+
             resp.raise_for_status()
 
-            # Get actual size from Content-Length header (may differ from manifest if compressed)
+            # Determine write mode and starting offset from response status
+            if resp.status_code == 206:
+                file_mode = "ab"
+                bytes_done = resume_from
+            else:
+                # 200 — server doesn't support ranges; start fresh
+                file_mode = "wb"
+                bytes_done = 0
+                resume_from = 0
+
+            # Resolve total bytes for progress reporting
             content_length_str = resp.headers.get("Content-Length")
-            total_bytes: int = 0
+            total_bytes: int = expected_size or 0
             if content_length_str:
                 try:
-                    total_bytes = int(content_length_str)
-                    # If manifest didn't have size, emit [FILESIZE] from header
+                    cl = int(content_length_str)
+                    # For 206, Content-Length is remaining bytes; full = offset + remaining
+                    total_bytes = resume_from + cl
                     if not expected_size:
                         print(f"[FILESIZE] {total_bytes}")
                         sys.stdout.flush()
                 except ValueError:
                     pass
-            elif expected_size:
-                total_bytes = expected_size
 
-            # Stream download with progress reporting
-            bytes_done = 0
-            sha256 = hashlib.sha256()
+            # Stream to part file (append on resume, overwrite on fresh start)
+            with open(part_path, file_mode) as f:
+                for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
+                    if chunk:
+                        f.write(chunk)
+                        bytes_done += len(chunk)
+                        print(f"[FILEPROGRESS] {bytes_done}/{total_bytes}")
+                        sys.stdout.flush()
+                        if progress_callback is not None:
+                            progress_callback(bytes_done, total_bytes)
 
-            # Write to a temp file first (atomic rename on success)
-            import tempfile as _tempfile
-            import os as _os
-            tmp_fd, tmp_path = _tempfile.mkstemp(dir=str(dest_path.parent), suffix=".gguf.tmp")
-            try:
-                with _os.fdopen(tmp_fd, "wb") as f:
-                    for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
-                        if chunk:
-                            f.write(chunk)
-                            sha256.update(chunk)
-                            bytes_done += len(chunk)
-                            # Emit progress marker
-                            print(f"[FILEPROGRESS] {bytes_done}/{total_bytes}")
-                            sys.stdout.flush()
-                            if progress_callback is not None:
-                                progress_callback(bytes_done, total_bytes)
-
-                # Atomic rename
-                _os.replace(tmp_path, str(dest_path))
-            except Exception:
-                # Clean up temp file on failure
-                try:
-                    _os.unlink(tmp_path)
-                except OSError:
-                    pass
-                raise
-
-            # Verify download size
-            if bytes_done == 0:
+            if bytes_done == 0 and resume_from == 0:
                 raise ValueError("Downloaded file is empty — possible network error")
 
-            # Store digest sidecar for future idempotency checks
-            # Note: remote_digest is the OCI blob digest (sha256:...) from the manifest
+            # Atomic rename and persist digest sidecar
+            _os.replace(str(part_path), str(dest_path))
             _write_local_digest(dest_path, remote_digest)
 
-            actual_size_str = fmt_size(bytes_done)
-            print(f"  [OK]   Saved to: {dest_path}  ({actual_size_str})")
+            print(f"  [OK]   Saved to: {dest_path}  ({fmt_size(bytes_done)})")
             return dest_path
 
         except Exception as exc:
@@ -686,6 +708,7 @@ def download_model_gguf(
                 f"  [WARN] Download error (attempt {attempt + 1}/{retry_count + 1}): {exc}\n"
                 f"         Retrying in {wait:.0f}s ..."
             )
+            # Part file is kept — next attempt will resume from where we left off
             time.sleep(wait)
 
     raise RuntimeError(
