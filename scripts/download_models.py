@@ -238,6 +238,12 @@ class ModelEntry:
     tags: list[str] = field(default_factory=list)
     vram_gb: float = 0.0
     description: str = ""
+    # Ollama support: source determines download backend
+    # 'huggingface' (default, backward-compatible) or 'ollama'
+    source: str = field(default="huggingface")
+    # Ollama model tag (e.g. 'llama3.2:8b-instruct-q4_K_M')
+    # Only used when source == 'ollama'
+    ollama_model: str = field(default="")
 
 
 @dataclass
@@ -347,6 +353,9 @@ def load_config(config_path: Path) -> tuple[dict, list[ModelEntry]]:
                 tags=item.get("tags", []),
                 vram_gb=float(item.get("vram_gb", 0)),
                 description=item.get("description", ""),
+                # Ollama fields — backward compatible via .get() defaults
+                source=str(item.get("source", "huggingface") or "huggingface"),
+                ollama_model=str(item.get("ollama_model", "") or ""),
             )
             models.append(entry)
         except KeyError as exc:
@@ -415,6 +424,35 @@ def check_existing(
         return "DOWNLOAD"
 
     if update_policy == "skip":
+        return "SKIP"
+
+    # ── Ollama: digest-based idempotency (replaces ETag for Ollama sources) ──
+    if model.source == "ollama":
+        if update_policy == "always":
+            return "DOWNLOAD"
+        # Read locally stored digest (written as .etag sidecar by ollama_hub)
+        local_digest = _read_local_etag(local_file)
+        if local_digest is None:
+            # No sidecar yet — we cannot tell if file is current, default to SKIP
+            print(
+                f"  [WARN] No digest sidecar for Ollama model {model.ollama_model};"
+                " defaulting to SKIP (use --force to re-download)"
+            )
+            return "SKIP"
+        # Fetch remote digest from OCI manifest
+        try:
+            import ollama_hub
+            info = ollama_hub.get_model_info(model.ollama_model)
+            remote_digest = info.get("digest", "")
+        except Exception as exc:
+            print(
+                f"  [WARN] Cannot fetch Ollama manifest for {model.ollama_model}: {exc};"
+                " keeping existing file"
+            )
+            return "SKIP"
+        if local_digest != remote_digest:
+            print(f"  [INFO] Ollama digest changed — will re-download {model.filename}")
+            return "DOWNLOAD"
         return "SKIP"
 
     if update_policy == "etag":
@@ -625,14 +663,73 @@ def download_model(
     download_timeout: Optional[float] = None,
 ) -> DownloadResult:
     """
-    Download a single model file.  Idempotent: checks ETag before downloading.
-    Uses hf_hub_download() which writes atomically (temp file → rename).
-    """
-    from huggingface_hub import HfApi, hf_hub_download
-    from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, RepositoryNotFoundError
+    Download a single model file.  Idempotent: checks ETag/digest before downloading.
 
+    For source=='ollama': delegates to ollama_hub.download_model_gguf().
+    For source=='huggingface' (default): uses hf_hub_download() (existing path).
+    """
     local_dir = models_root / model.dest_dir
     local_file = local_dir / model.filename
+
+    # ── Ollama source: delegate to ollama_hub ─────────────────────────────────
+    if model.source == "ollama":
+        if not model.ollama_model:
+            return DownloadResult(
+                model=model,
+                status="ERROR",
+                error="Ollama model entry is missing 'ollama_model' field",
+            )
+
+        if dry_run:
+            # Validate: try to fetch manifest (lightweight HEAD equivalent)
+            try:
+                import ollama_hub
+                ollama_hub.get_model_info(model.ollama_model)
+                return DownloadResult(model=model, status="DRYRUN", local_path=local_file)
+            except Exception as exc:
+                return DownloadResult(
+                    model=model,
+                    status="ERROR",
+                    error=f"Ollama manifest validation failed: {exc}",
+                )
+
+        decision = check_existing(local_file, model, update_policy, token, force)
+        if decision == "SKIP":
+            return DownloadResult(
+                model=model,
+                status="SKIP",
+                local_path=local_file,
+                size_bytes=local_file.stat().st_size if local_file.is_file() else 0,
+            )
+
+        # Delegate download to ollama_hub
+        local_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            import ollama_hub
+
+            def _progress_cb(bytes_done: int, total_bytes: int) -> None:
+                # Progress already emitted by ollama_hub via [FILEPROGRESS] markers
+                pass
+
+            downloaded = ollama_hub.download_model_gguf(
+                model.ollama_model,
+                dest_path=local_file,
+                progress_callback=_progress_cb,
+                retry_count=retry_count,
+                retry_delay=retry_delay,
+            )
+            return DownloadResult(
+                model=model,
+                status="DOWNLOAD",
+                local_path=downloaded,
+                size_bytes=downloaded.stat().st_size if downloaded.is_file() else 0,
+            )
+        except Exception as exc:
+            return DownloadResult(model=model, status="ERROR", error=str(exc))
+
+    # ── HuggingFace source (default) ──────────────────────────────────────────
+    from huggingface_hub import HfApi, hf_hub_download
+    from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, RepositoryNotFoundError
 
     # ── Dry-run: validate repo exists ────────────────────────────────────────
     if dry_run:
