@@ -43,13 +43,19 @@ from typing import Callable, Optional
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import fmt_size, ProxyConfig, load_proxy_config  # noqa: E402
 
-__all__ = ["search_models", "get_model_info", "download_model_gguf"]
+__all__ = ["search_models", "get_model_info", "get_model_tags", "download_model_gguf"]
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _REGISTRY_BASE = "https://registry.ollama.ai/v2"
 _SEARCH_URL = "https://ollama.com/search"
 _TAGS_URL = "https://ollama.com/api/tags"
+_LIBRARY_BASE = "https://ollama.com/library"
+
+# Tag page regex: matches <span class="group-hover:underline">model:tag</span>
+_TAG_PAGE_RE = re.compile(
+    r'<span\s+class="group-hover:underline">[^:<]+:([^<]{1,80})</span>'
+)
 _OLLAMA_MODEL_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
 # Retry settings matching download_models.py pattern
@@ -250,6 +256,39 @@ def get_model_info(model_tag: str) -> dict:
         "size": manifest["size"],
         "size_str": fmt_size(manifest["size"]) if manifest["size"] else "unknown",
     }
+
+
+def get_model_tags(model_name: str) -> list:
+    """
+    Fetch all available tags (size/quant variants) for an Ollama model.
+
+    Scrapes https://ollama.com/library/{model}/tags — the same public page
+    the browser shows. The OCI registry /v2/.../tags/list endpoint is not
+    supported by registry.ollama.ai (returns 404).
+
+    Returns a list of tag name strings, e.g.:
+      ['latest', '0.6b', '1.7b', '4b', '7b', '14b', '32b', ...]
+    Order preserved as on the page ('latest' first, then by size/quant).
+    """
+    # Strip any existing tag / namespace to get the bare model name
+    base = model_name.split(":")[0].split("/")[-1]
+    url = f"{_LIBRARY_BASE}/{base}/tags"
+    session = _get_session()
+    # Use a browser-like User-Agent to avoid bot detection
+    session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120"})
+    resp = session.get(url, timeout=15)
+    resp.raise_for_status()
+    # Extract tags from <span class="group-hover:underline">model:tag</span>
+    tags = _TAG_PAGE_RE.findall(resp.text)
+    # Deduplicate while preserving order
+    seen: set = set()
+    result = []
+    for t in tags:
+        t = t.strip()
+        if t and t not in seen:
+            seen.add(t)
+            result.append(t)
+    return result
 
 
 # ─── Search ───────────────────────────────────────────────────────────────────

@@ -524,6 +524,25 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .filter-chip:hover  { border-color: var(--accent); color: var(--accent); }
   .filter-chip.active { border-color: var(--accent); color: var(--accent);
                         background: #2d1f6e; }
+  /* Ollama variant picker in search results */
+  .ollama-variant-btn {
+    margin-top: 5px; padding: 2px 8px; font-size: 0.7rem;
+    background: none; border: 1px dashed var(--border); border-radius: 4px;
+    color: var(--text-muted); cursor: pointer; display: inline-block;
+    transition: all 0.13s;
+  }
+  .ollama-variant-btn:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+  .file-size-tag {
+    font-size: 0.62rem; color: var(--text-muted); background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
+    vertical-align: middle; margin-left: 4px; cursor: default;
+  }
+  .ollama-tag-select {
+    margin-top: 5px; padding: 3px 6px; font-size: 0.72rem; display: block;
+    background: var(--bg-elevated); border: 1px solid var(--accent);
+    border-radius: 4px; color: var(--text-primary); cursor: pointer;
+    max-width: 220px; outline: none;
+  }
   .hf-field select {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
     color: var(--text-primary); padding: 7px 10px; font-size: 0.82rem;
@@ -869,20 +888,6 @@ HTML_PAGE = r"""<!DOCTYPE html>
             <span>–</span>
             <input type="number" id="hf-max-size" placeholder="до" min="0" step="100" oninput="hfApplySizeFilter()">
             <span style="color:var(--text-muted);font-size:0.72rem">МБ</span>
-          </div>
-        </div>
-      </div>
-      <!-- Строка Ollama: фильтр возможностей для поиска (только при source=ollama) -->
-      <div id="ollama-search-caps-row" class="hf-filters-row" style="display:none">
-        <div class="hf-filter-group">
-          <label>Фильтр возможностей <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">можно выбрать несколько</span></label>
-          <div class="filter-chips" id="ollama-search-caps">
-            <span class="filter-chip active" data-cap="" onclick="toggleOllamaSearchCap(this)" title="Все модели">Все</span>
-            <span class="filter-chip" data-cap="tools" onclick="toggleOllamaSearchCap(this)" title="Поддержка вызова инструментов (function calling)">tools</span>
-            <span class="filter-chip" data-cap="thinking" onclick="toggleOllamaSearchCap(this)" title="Режим мышления / chain-of-thought (thinking mode)">thinking</span>
-            <span class="filter-chip" data-cap="vision" onclick="toggleOllamaSearchCap(this)" title="Работа с изображениями (multimodal)">vision</span>
-            <span class="filter-chip" data-cap="embedding" onclick="toggleOllamaSearchCap(this)" title="Модели для эмбеддингов (embedding)">embedding</span>
-            <span class="filter-chip" data-cap="cloud" onclick="toggleOllamaSearchCap(this)" title="Доступно через облако Ollama (Cloud inference)">cloud</span>
           </div>
         </div>
       </div>
@@ -1613,31 +1618,11 @@ function onSourceChange() {
   const pipelineField = document.getElementById('hf-pipeline-tag');
   if (pipelineField) pipelineField.closest('.hf-field').style.display = isOllama ? 'none' : '';
   // HF-only filters row (regex, language, size)
-  const hfFiltersRow = document.querySelector('.hf-filters-row:not(#ollama-search-caps-row):not(#ollama-caps-row)');
+  const hfFiltersRow = document.querySelector('.hf-filters-row:not(#ollama-caps-row)');
   if (hfFiltersRow) hfFiltersRow.style.display = isOllama ? 'none' : '';
-  // Ollama pre-search capability selector
-  const searchCapsRow = document.getElementById('ollama-search-caps-row');
-  if (searchCapsRow) searchCapsRow.style.display = isOllama ? '' : 'none';
   // Post-search result filter — hide until search completes
   const capsRow = document.getElementById('ollama-caps-row');
   if (capsRow) capsRow.style.display = 'none';
-}
-
-function toggleOllamaSearchCap(chip) {
-  const isAll = chip.dataset.cap === '';
-  if (isAll) {
-    // Activate "Все", deactivate others
-    document.querySelectorAll('#ollama-search-caps .filter-chip').forEach(c => {
-      c.classList.toggle('active', c.dataset.cap === '');
-    });
-  } else {
-    // Toggle specific cap; deactivate "Все"
-    chip.classList.toggle('active');
-    const allChip = document.querySelector('#ollama-search-caps .filter-chip[data-cap=""]');
-    const anyActive = [...document.querySelectorAll('#ollama-search-caps .filter-chip[data-cap]:not([data-cap=""])')]
-      .some(c => c.classList.contains('active'));
-    if (allChip) allChip.classList.toggle('active', !anyActive);
-  }
 }
 
 async function hfSearch() {
@@ -1679,12 +1664,7 @@ async function hfSearch() {
   const params = new URLSearchParams();
   params.set('source', source);
   if (q) params.set('q', q);
-  if (isOllama) {
-    // Collect selected capability pre-filters (c= parameter for ollama.com)
-    const activeCaps = [...document.querySelectorAll('#ollama-search-caps .filter-chip[data-cap]:not([data-cap=""]).active')]
-      .map(c => c.dataset.cap);
-    activeCaps.forEach(c => params.append('caps', c));
-  } else {
+  if (!isOllama) {
     if (author) params.set('author', author);
     if (fileRegex) params.set('file_regex', fileRegex);
     if (pipelineTag) params.set('pipeline_tag', pipelineTag);
@@ -1790,10 +1770,24 @@ function renderHfResults(results) {
       const tdFile = document.createElement('td');
       tdFile.className = 'cell-hf-files';
       if (fname) {
-        const sizeHtml = fsize != null
-          ? `<span class="file-size" style="display:block;margin-top:2px">${fmtSize(fsize)}</span>`
+        const sizeNote = (r.source === 'ollama' && fsize != null)
+          ? ` <span class="file-size-tag" title="Размер тега latest; изменится при выборе варианта">latest</span>`
           : '';
-        tdFile.innerHTML = `<span class="file-item">${escHtml(fname)}${sizeHtml}</span>`;
+        const sizeHtml = fsize != null
+          ? `<span class="file-size ollama-file-size" style="display:block;margin-top:2px">${fmtSize(fsize)}${sizeNote}</span>`
+          : (r.source === 'ollama' ? `<span class="file-size ollama-file-size" style="display:block;margin-top:2px;color:var(--text-muted)">размер неизвестен</span>` : '');
+        tdFile.innerHTML = `<span class="file-item"><span class="file-item-name">${escHtml(fname)}</span>${sizeHtml}</span>`;
+        // For Ollama results: add variant picker button (lazy-loads tags on click)
+        if (r.source === 'ollama') {
+          const variantBtn = document.createElement('button');
+          variantBtn.className = 'ollama-variant-btn';
+          variantBtn.textContent = '▾ выбрать вариант';
+          const modelBase = r.ollama_model
+            ? r.ollama_model.split(':')[0]
+            : r.repo_id.replace('ollama/', '');
+          variantBtn.onclick = () => loadOllamaTags(variantBtn, modelBase, r, key);
+          tdFile.appendChild(variantBtn);
+        }
       } else {
         tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов по фильтру</span>`;
       }
@@ -1928,12 +1922,24 @@ function applyOllamaCapsFilter() {
 function hfSelectionChange(cb, r, fname) {
   const key = r.repo_id + '||' + (fname || '');
   if (cb.checked) {
+    // For Ollama rows: pick up selected variant if picker is open
+    let effectiveOllamaModel = r.ollama_model || '';
+    let effectiveFilename    = fname || '';
+    if (r.source === 'ollama') {
+      const variantSel = cb.closest('tr')?.querySelector('.ollama-tag-select');
+      if (variantSel && variantSel.value) {
+        const tag       = variantSel.value;
+        const modelBase = effectiveOllamaModel.split(':')[0] || r.repo_id.replace('ollama/', '');
+        effectiveOllamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
+        effectiveFilename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
+      }
+    }
     hfSelected.set(key, {
-      repo_id: r.repo_id, filename: fname || '', gated: r.gated,
+      repo_id: r.repo_id, filename: effectiveFilename, gated: r.gated,
       tags: r.tags || [], description: r.description || '',
       pipeline_tag: r.pipeline_tag || '',
       source: r.source || 'huggingface',
-      ollama_model: r.ollama_model || '',
+      ollama_model: effectiveOllamaModel,
     });
   } else {
     hfSelected.delete(key);
@@ -1993,6 +1999,102 @@ function hfApplySizeFilter() {
     }
   });
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+}
+
+// ── Ollama variant (tag) picker ───────────────────────────────────────────────
+
+async function loadOllamaTags(btn, modelBase, r, key) {
+  btn.disabled = true;
+  btn.textContent = '⏳ загрузка...';
+  try {
+    const resp = await fetch(`/api/ollama/tags?model=${encodeURIComponent(modelBase)}`);
+    const data = await resp.json();
+    const tags = data.tags || [];
+    if (!tags.length) {
+      btn.textContent = '▾ нет вариантов';
+      btn.disabled = false;
+      return;
+    }
+    // Replace button with <select>, grouped by base size for large lists
+    const sel = document.createElement('select');
+    sel.className = 'ollama-tag-select';
+    sel.title = 'Выбрать вариант размера/квантизации';
+
+    // Group tags by leading size token (e.g. "7b", "14b", "0.5b")
+    // Tags that don't match go into "__other__"; "latest" stays first.
+    const groups = new Map();
+    const _sizeRe = /^(\d+(?:\.\d+)?[bBmMgG])/i;
+    for (const t of tags) {
+      const m = _sizeRe.exec(t);
+      const key = m ? m[1].toLowerCase()
+                    : (t === 'latest' ? '__latest__' : '__other__');
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+
+    if (groups.size > 2) {
+      // More than two groups → use <optgroup> per size
+      for (const [key, groupTags] of groups) {
+        const grp = document.createElement('optgroup');
+        grp.label = key === '__latest__' ? '— latest —'
+                  : key === '__other__'  ? '— other —'
+                  : key;
+        for (const t of groupTags) {
+          const opt = document.createElement('option');
+          opt.value = t; opt.textContent = t;
+          if (t === 'latest') opt.selected = true;
+          grp.appendChild(opt);
+        }
+        sel.appendChild(grp);
+      }
+    } else {
+      // Few tags — flat list
+      for (const t of tags) {
+        const opt = document.createElement('option');
+        opt.value = t; opt.textContent = t;
+        if (t === 'latest') opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+
+    sel.onchange = () => onOllamaVariantChange(sel, modelBase, r, key);
+    btn.replaceWith(sel);
+  } catch (_e) {
+    btn.textContent = '⚠ ошибка';
+    btn.disabled = false;
+  }
+}
+
+async function onOllamaVariantChange(sel, modelBase, r, key) {
+  const tag = sel.value;
+  const newOllamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
+  const newFilename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
+  const td = sel.closest('td');
+  // Update the displayed filename
+  const nameEl = td?.querySelector('.file-item-name');
+  if (nameEl) nameEl.textContent = newFilename;
+  // Update hfSelected entry if row is checked
+  if (hfSelected.has(key)) {
+    const entry = hfSelected.get(key);
+    entry.ollama_model = newOllamaModel;
+    entry.filename     = newFilename;
+  }
+  // Fetch and update the size for the selected variant
+  const sizeEl = td?.querySelector('.ollama-file-size');
+  if (sizeEl) {
+    sizeEl.textContent = 'размер…';
+    try {
+      const resp = await fetch(`/api/ollama/size?model=${encodeURIComponent(newOllamaModel)}`);
+      const data = await resp.json();
+      if (data.size_bytes > 0) {
+        sizeEl.textContent = fmtSize(data.size_bytes);
+      } else {
+        sizeEl.textContent = 'размер неизвестен';
+      }
+    } catch (_e) {
+      sizeEl.textContent = 'размер неизвестен';
+    }
+  }
 }
 
 // ── helpers for add form pre-fill ─────────────────────────────────────────────
@@ -3165,6 +3267,32 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
 
+        elif path == "/api/ollama/tags":
+            qs = parse_qs(parsed.query)
+            model_name = (qs.get("model", [None])[0] or "").strip()
+            if not model_name or not _OLLAMA_AVAILABLE:
+                self._send_json({"tags": [], "error": "unavailable"})
+                return
+            try:
+                tags = _ollama_hub.get_model_tags(model_name)
+                self._send_json({"tags": tags})
+            except Exception as e:
+                self._send_json({"tags": [], "error": str(e)})
+            return
+
+        elif path == "/api/ollama/size":
+            qs = parse_qs(parsed.query)
+            model_tag = (qs.get("model", [None])[0] or "").strip()
+            if not model_tag or not _OLLAMA_AVAILABLE:
+                self._send_json({"size_bytes": None, "error": "unavailable"})
+                return
+            try:
+                info = _ollama_hub.get_model_info(model_tag)
+                self._send_json({"size_bytes": info.get("size", 0) or 0})
+            except Exception as e:
+                self._send_json({"size_bytes": None, "error": str(e)})
+            return
+
         elif path == "/api/search":
             qs = parse_qs(parsed.query)
             query        = qs.get("q", [None])[0] or None
@@ -3173,8 +3301,6 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             pipeline_tag = qs.get("pipeline_tag", [None])[0] or None
             language     = qs.get("language", [None])[0] or None
             source       = qs.get("source", ["huggingface"])[0] or "huggingface"
-            # Ollama capability pre-filter (c= parameter for ollama.com)
-            ollama_caps  = qs.get("caps", [])  # list of capability strings
             try:
                 limit = int(qs.get("limit", ["20"])[0])
             except (ValueError, TypeError):
@@ -3190,7 +3316,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     return
                 try:
                     ollama_results = _ollama_hub.search_models(
-                        query=query, limit=limit, capabilities=ollama_caps or None
+                        query=query, limit=limit
                     )
                     # Normalize to same shape expected by frontend:
                     # repo_id, downloads, likes, gated, pipeline_tag, tags, files, description
