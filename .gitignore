@@ -26,6 +26,9 @@ models/
 credentials.yaml
 credentials.*.yaml
 
+# Personal model list — use models.yaml.example as template
+models.yaml
+
 # Process lock file (download_models.py runtime artifact)
 .download.lock
 

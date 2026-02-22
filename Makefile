@@ -3,7 +3,7 @@ SHELL := /bin/bash
 VENV_PYTHON := .venv/bin/python
 VENV_PIP    := .venv/bin/pip
 
-.PHONY: setup download browse ui list update check-creds-perms security-check
+.PHONY: setup download ui list update check-creds-perms security-check
 
 ## setup — создать .venv и установить зависимости
 setup:
@@ -19,10 +19,6 @@ download:
 ## list — показать список моделей
 list:
 	$(VENV_PYTHON) scripts/download_models.py --list
-
-## browse — поиск моделей на HuggingFace Hub
-browse:
-	$(VENV_PYTHON) scripts/browse_models.py
 
 ## ui — запустить веб-интерфейс и открыть браузер
 ##      PORT=9000  HOST=127.0.0.1  CONFIG=models.yaml
@@ -58,7 +54,7 @@ check-creds-perms:
 security-check: check-creds-perms
 	@echo ""
 	@echo "=== Проверка .gitignore ==="
-	@for secret in credentials.yaml .env .download.lock; do \
+	@for secret in credentials.yaml models.yaml .env .download.lock; do \
 	  if grep -qF "$$secret" .gitignore 2>/dev/null; then \
 	    echo "[OK]   $$secret в .gitignore"; \
 	  else \

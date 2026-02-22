@@ -1,0 +1,60 @@
+settings:
+  models_dir: ./models
+  update_policy: etag           # etag | skip | always
+  retry_count: 3
+  retry_delay: 5.0
+  inter_download_delay: 0
+  hf_download_concurrency: 4   # макс. параллельных TCP при Xet-протоколе (null = без ограничений)
+  download_timeout_hours: 2    # таймаут на файл в часах; 0 = без ограничений
+  bandwidth_limit_mbps: null   # лимит Mbit/s для стандартного HTTP (null = без ограничений)
+  s3:
+    sync_after_download: false  # автоматически синхронизировать в S3 после загрузки
+
+models:
+  # ── HuggingFace — GGUF-модель ────────────────────────────────────────────────
+  - repo_id: bartowski/Qwen2.5-14B-Instruct-GGUF
+    filename: Qwen2.5-14B-Instruct-Q4_K_M.gguf
+    dest_dir: llm/qwen
+    enabled: true
+    gated: false
+    tags: [llm, chat, 14b]
+    description: "Qwen 2.5 14B — Alibaba, Apache 2.0"
+
+  # ── HuggingFace — закрытая (gated) модель ────────────────────────────────────
+  - repo_id: meta-llama/Llama-3.1-8B-Instruct
+    filename: model.safetensors
+    dest_dir: llm/llama
+    enabled: false
+    gated: true                 # требует принятия лицензии на huggingface.co
+    tags: [llm, chat, 8b]
+    description: "Llama 3.1 8B Instruct — Meta"
+
+  # ── Ollama — тег latest (скачивается вариант по умолчанию) ───────────────────
+  - repo_id: ollama/llama3.2
+    filename: llama3.2.gguf
+    dest_dir: llm/llama
+    enabled: true
+    source: ollama
+    ollama_model: llama3.2      # без тега → загружается latest
+    tags: [llm, chat, 3b]
+    description: "Llama 3.2 3B — Meta"
+
+  # ── Ollama — конкретный размер и квантизация ──────────────────────────────────
+  - repo_id: ollama/qwen3
+    filename: qwen3-7b.gguf
+    dest_dir: llm/qwen
+    enabled: true
+    source: ollama
+    ollama_model: qwen3:7b      # формат model:tag
+    tags: [llm, chat, thinking, 7b]
+    description: "Qwen 3 7B — Alibaba"
+
+  # ── Ollama — embedding-модель ─────────────────────────────────────────────────
+  - repo_id: ollama/nomic-embed-text
+    filename: nomic-embed-text.gguf
+    dest_dir: embeddings
+    enabled: true
+    source: ollama
+    ollama_model: nomic-embed-text
+    tags: [embedding]
+    description: "Nomic Embed Text — высокопроизводительные эмбеддинги"

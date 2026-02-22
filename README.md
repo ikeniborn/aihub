@@ -20,6 +20,7 @@
 make setup                                      # создать .venv и установить зависимости
 cp credentials.yaml.example credentials.yaml   # добавить токены
 cp .env.example .env                            # добавить S3-параметры
+cp models.yaml.example models.yaml             # создать список моделей
 make ui                                         # открыть веб-интерфейс → http://localhost:9000
 make download                                   # загрузка всех включённых моделей
 ```
@@ -132,30 +133,12 @@ make download
 HTTP 429 (rate limit) обрабатывается автоматически: задержка ×10 от базовой.
 Одновременно может работать только один процесс загрузки (PID lock `.download.lock`).
 
-### `browse_models.py` — поиск на HuggingFace (CLI)
-
-```bash
-python scripts/browse_models.py [OPTIONS]
-make browse
-```
-
-```
---query TEXT            полнотекстовый поиск
---author NAME           фильтр по автору
---tags TAG ...          фильтр по тегам модели
---pipeline-tag TAG      тип задачи (text-generation, sentence-similarity, …)
---language CODE         язык (ru, en, …)
---file-regex PATTERN    regex по именам файлов внутри репо
---sort FIELD            сортировка: downloads | likes | lastModified
---limit N               макс. результатов (default: 20)
---show-files            показать список файлов каждого репо
---yaml                  вывод YAML-фрагмента для models.yaml
---creds FILE            путь к credentials.yaml
-```
-
 ---
 
 ## `models.yaml` — список моделей
+
+Создаётся из шаблона: `cp models.yaml.example models.yaml`
+Файл gitignored — персональный список моделей не попадает в репозиторий.
 
 ```yaml
 settings:
@@ -220,15 +203,15 @@ aihub/
 ├── models.yaml                  # список моделей
 ├── requirements.txt             # зависимости
 ├── pyproject.toml               # конфигурация проекта (PEP 517)
-├── Makefile                     # setup, download, ui, browse, list, update, security-check
+├── Makefile                     # setup, download, ui, list, update, security-check
 ├── credentials.yaml.example     # шаблон секретов
 ├── .env.example                 # шаблон параметров
+├── models.yaml.example          # шаблон списка моделей (скопировать в models.yaml)
 ├── scripts/
 │   ├── utils.py                 # общие утилиты (fmt_size, ProxyConfig)
 │   ├── download_models.py       # загрузка моделей → локально / S3
 │   ├── model_browser.py         # веб-интерфейс (порт 9000)
-│   ├── ollama_hub.py            # Ollama OCI client: поиск, теги, загрузка GGUF
-│   └── browse_models.py         # поиск на HuggingFace (CLI)
+│   └── ollama_hub.py            # Ollama OCI client: поиск, теги, загрузка GGUF
 ├── docs/
 │   └── GUIDES.md                # пошаговое руководство пользователя
 ├── .venv/                       # виртуальное окружение (gitignored)
@@ -242,6 +225,7 @@ aihub/
 | Файл | git | Содержимое |
 |------|-----|-----------|
 | `credentials.yaml` | **ignored** | токены, ключи — никогда не коммитить |
+| `models.yaml` | **ignored** | персональный список моделей |
 | `.env` | **ignored** | параметры конфигурации |
 | `models/` | **ignored** | бинарные веса моделей |
 | `*.etag` | **ignored** | состояние загрузки (дедупликация) |
@@ -249,7 +233,7 @@ aihub/
 
 ```bash
 chmod 600 credentials.yaml   # обязательно после создания
-make security-check           # проверить права, .gitignore и наличие токенов в коде
+make security-check   # проверить права, .gitignore (credentials.yaml, models.yaml, .env) и токены в коде
 ```
 
 Пароли в `PROXY_URL` автоматически маскируются в логах: `http://user:***@host:port`.
