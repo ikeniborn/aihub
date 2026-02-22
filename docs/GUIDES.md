@@ -59,7 +59,16 @@ cp .env.example .env
 HF_HUB_ENABLE_HF_TRANSFER=1   # ускоренные загрузки (рекомендуется)
 ```
 
-### Шаг 4 — проверить конфигурацию
+### Шаг 4 — создать список моделей
+
+```bash
+cp models.yaml.example models.yaml
+```
+
+Открыть `models.yaml` и при необходимости отредактировать список моделей или оставить примеры из шаблона.
+Файл gitignored — персональные настройки не попадут в репозиторий.
+
+### Шаг 5 — проверить конфигурацию
 
 ```bash
 python scripts/download_models.py --list
@@ -85,7 +94,7 @@ python scripts/download_models.py --list
 python scripts/download_models.py --dry-run
 ```
 
-Скрипт проверяет доступность репозиториев на HuggingFace без скачивания файлов. Выводит те же статусы, что и при реальной загрузке.
+Скрипт проверяет доступность репозиториев (HuggingFace: запрос `repo_info`; Ollama: запрос манифеста) без скачивания файлов. Выводит те же статусы, что и при реальной загрузке.
 
 ### Загрузить все включённые модели
 
@@ -153,7 +162,7 @@ python scripts/model_browser.py --open
 python scripts/model_browser.py --host 0.0.0.0 --port 9001 --open
 ```
 
-Интерфейс содержит две вкладки: **Мои модели** и **Поиск HuggingFace**.
+Интерфейс содержит три вкладки: **Мои модели**, **Поиск HuggingFace** и **Поиск Ollama**.
 
 ---
 
@@ -195,7 +204,7 @@ python scripts/model_browser.py --host 0.0.0.0 --port 9001 --open
 
 **Инлайн-редактирование атрибутов (кнопка ✎):**
 1. Нажать ✎ в строке модели — откроется форма редактирования
-2. Доступные поля: теги, VRAM (GB), описание, `dest_dir`, gated
+2. Доступные поля: теги, описание, `dest_dir`, gated
 3. Нажать **Сохранить** — изменения записываются в `models.yaml`
 4. Если изменился `dest_dir` и файл скачан — файл автоматически перемещается в новую директорию
 
@@ -228,9 +237,8 @@ python scripts/model_browser.py --host 0.0.0.0 --port 9001 --open
    - В таблице видны: pipeline_tag, лайки, описание, размер файла, теги
 3. Нажать **Добавить выбранные**
 4. Откроется таблица с отдельной строкой на каждую выбранную модель:
-   - `dest_dir`, теги, VRAM, описание — предзаполняются автоматически из результатов поиска
+   - `dest_dir`, теги, описание — предзаполняются автоматически из результатов поиска
    - `dest_dir` определяется по типу задачи и названию модели (напр. `llm/qwen`, `embeddings`)
-   - VRAM оценивается из размера модели и типа квантизации
    - Все поля можно скорректировать перед добавлением
 5. Нажать **Добавить в models.yaml**
 
@@ -246,210 +254,78 @@ python scripts/model_browser.py --host 0.0.0.0 --port 9001 --open
 
 1. Автор: `bartowski`, Regex файлов: `Q4_K_M\.gguf$` → Искать
 2. Выбрать нужные файлы → Добавить выбранные
-3. Проверить/исправить строки: `dest_dir: llm/llama`, теги: `llm chat 8b`, VRAM: `5`
+3. Проверить/исправить строки: `dest_dir: llm/llama`, теги: `llm chat 8b`
 4. Нажать Добавить в models.yaml → Переключиться на «Мои модели»
 5. В терминале: `python scripts/download_models.py --model Llama`
 
 ---
 
+### Вкладка «Поиск Ollama»
+
+Позволяет искать модели на `ollama.com` и добавлять их в `models.yaml` в формате Ollama-записи.
+
+**Поиск:**
+Ввести название модели (напр. `qwen3`, `llama3.2`) → нажать **Искать**. Отображаются: число загрузок (pulls), теги возможностей, число вариантов, описание.
+
+**Возможности модели (теги):**
+
+| Тег | Значение |
+|-----|---------|
+| `tools` | Поддержка function calling / tool use |
+| `thinking` | Режим расширенного рассуждения (chain-of-thought) |
+| `vision` | Анализ изображений |
+| `embedding` | Генерация векторных эмбеддингов |
+| `cloud` | Облачная / API-модель (не локальная) |
+
+Кнопки-фильтры над таблицей фильтруют результаты по выбранным возможностям (с счётчиком по каждому).
+
+**Выбор варианта (размер/квантизация):**
+
+1. Нажать кнопку **▾ выбрать вариант** в строке нужной модели
+2. Открывается список тегов, сгруппированных по базовому размеру (0.5b / 1.5b / 7b / 14b / …)
+3. Выбрать нужный вариант — имя файла и размер обновляются автоматически
+4. Отметить чекбоксом → нажать **Добавить выбранные**
+
+> Размер, отображаемый до выбора варианта — это размер тега `latest`. При выборе конкретного варианта размер обновляется через запрос к OCI-реестру.
+
+**Процесс добавления Ollama-модели:**
+
+1. Найти модель → выбрать вариант → отметить чекбоксом
+2. Нажать **Добавить выбранные**
+3. Заполнить форму: `dest_dir`, теги, описание
+4. Нажать **Добавить в models.yaml**
+
+Ollama-модели загружаются из OCI-реестра `registry.ollama.ai` в формате GGUF с поддержкой HTTP Resume (прерванные загрузки продолжаются с точки останова).
+
+---
+
 ## 4. Поиск новых моделей
 
-Поиск доступен двумя способами: через **веб-интерфейс** (вкладка «Поиск HuggingFace», см. раздел 3) или через **командную строку** (`browse_models.py`).
+Поиск новых моделей доступен через **веб-интерфейс** (`make ui`) во вкладках:
 
-### Фильтры поиска
+- **Поиск HuggingFace** — поиск по `huggingface.co` (см. [Вкладка «Поиск HuggingFace»](#вкладка-поиск-huggingface) в разделе 3)
+- **Поиск Ollama** — поиск по `ollama.com` с выбором варианта квантизации (см. [Вкладка «Поиск Ollama»](#вкладка-поиск-ollama) в разделе 3)
 
-| Аргумент | Переменная `.env` | Что фильтрует |
-|---|---|---|
-| `--query TEXT` | — | Полнотекстовый поиск по названию и описанию |
-| `--author NAME` | — | Автор или организация |
-| `--pipeline-tag TASK` | `BROWSE_PIPELINE_TAG` | Задача модели (text-generation, text-to-image, …) |
-| `--library LIB` | `BROWSE_LIBRARY` | Формат / библиотека (gguf, safetensors, transformers, …) |
-| `--language LANG` | `BROWSE_LANGUAGE` | Язык модели (ru, en, zh, …) |
-| `--regex PATTERN` | — | Regex по `repo_id` (после API-запроса) |
-| `--file-regex PATTERN` | `BROWSE_FILE_REGEX` | Regex по именам файлов внутри репозитория |
-| `--tags TAG …` | — | Теги HuggingFace |
-| `--limit N` | — | Макс. кол-во результатов (по умолчанию: 20) |
-| `--sort` | — | Сортировка: `downloads` / `likes` / `lastModified` |
+### Полный цикл: найти → добавить → загрузить
 
-Переменные из `.env` задают дефолты — CLI-аргументы всегда имеют приоритет.
-
----
-
-### Поиск по задаче модели (`--pipeline-tag`)
+**HuggingFace:**
 
 ```bash
-# все LLM для генерации текста
-python scripts/browse_models.py --pipeline-tag text-generation --limit 30
-
-# модели для работы с изображениями
-python scripts/browse_models.py --pipeline-tag text-to-image --library safetensors
-
-# модели распознавания речи
-python scripts/browse_models.py --pipeline-tag automatic-speech-recognition --limit 20
-
-# модели для эмбеддингов / семантического поиска
-python scripts/browse_models.py --pipeline-tag sentence-similarity --file-regex "\.gguf$"
-```
-
-Популярные значения `pipeline_tag`:
-
-| Значение | Задача |
-|---|---|
-| `text-generation` | LLM, чат, генерация текста |
-| `text-to-image` | Генерация изображений (Stable Diffusion, FLUX) |
-| `automatic-speech-recognition` | Распознавание речи (Whisper) |
-| `text-to-speech` | Синтез речи |
-| `sentence-similarity` | Эмбеддинги, семантический поиск |
-| `text-classification` | Классификация текста |
-| `translation` | Перевод |
-| `image-classification` | Классификация изображений |
-
----
-
-### Поиск по формату / библиотеке (`--library`)
-
-```bash
-# только GGUF-модели
-python scripts/browse_models.py --query "llama" --library gguf
-
-# safetensors (для ComfyUI, A1111)
-python scripts/browse_models.py --pipeline-tag text-to-image --library safetensors
-
-# ONNX-модели
-python scripts/browse_models.py --query "whisper" --library onnx
-
-# модели для transformers
-python scripts/browse_models.py --author mistralai --library transformers
-```
-
----
-
-### Поиск по языку (`--language`)
-
-```bash
-# русскоязычные LLM в формате GGUF
-python scripts/browse_models.py --pipeline-tag text-generation --library gguf --language ru
-
-# китайские модели
-python scripts/browse_models.py --pipeline-tag text-generation --language zh --limit 20
-
-# многоязычные модели от конкретного автора
-python scripts/browse_models.py --author Qwen --language ru
-```
-
----
-
-### Поиск по автору с фильтром размера
-
-HuggingFace API не фильтрует по числу параметров напрямую — используйте `--regex`:
-
-```bash
-# только 14B-модели от bartowski
-python scripts/browse_models.py --author bartowski --regex "14[Bb]"
-
-# 7B и 8B модели
-python scripts/browse_models.py --author unsloth --regex "[78][Bb]"
-
-# модели 32B+
-python scripts/browse_models.py --pipeline-tag text-generation --library gguf --regex "3[2-9][Bb]|[4-9][0-9][Bb]"
-```
-
----
-
-### Просмотр файлов репозитория
-
-```bash
-# показать все файлы
-python scripts/browse_models.py --author bartowski --show-files
-
-# только Q4_K_M GGUF
-python scripts/browse_models.py --author bartowski --file-regex "Q4_K_M\.gguf$"
-
-# только safetensors
-python scripts/browse_models.py --pipeline-tag text-to-image --file-regex "\.safetensors$"
-```
-
----
-
-### Дефолты поиска через `.env`
-
-Если вы всегда ищете GGUF-модели с Q4_K_M квантизацией, настройте дефолты один раз:
-
-```dotenv
-# .env
-BROWSE_PIPELINE_TAG=text-generation
-BROWSE_LIBRARY=gguf
-BROWSE_FILE_REGEX=Q4_K_M\.gguf$
-```
-
-После этого достаточно указать только что искать:
-
-```bash
-# применяются дефолты из .env: pipeline_tag=text-generation, library=gguf, file_regex=Q4_K_M.gguf$
-python scripts/browse_models.py --author bartowski
-python scripts/browse_models.py --query "deepseek"
-python scripts/browse_models.py --language ru
-```
-
-Переопределить дефолт для одного запроса:
-
-```bash
-# искать safetensors, игнорируя BROWSE_FILE_REGEX из .env
-python scripts/browse_models.py --query "flux" --file-regex "\.safetensors$"
-```
-
----
-
-### Получить YAML для вставки в models.yaml
-
-```bash
-python scripts/browse_models.py \
-  --author bartowski \
-  --file-regex "Q4_K_M\.gguf$" \
-  --yaml
-```
-
-Вывод скопировать в раздел `models:` файла `models.yaml`.
-После вставки заполнить поля `dest_dir`, `tags`, `description` и поставить `enabled: true`.
-
----
-
-### Полный цикл через CLI: найти → добавить → загрузить
-
-```bash
-# 1. найти модель
-python scripts/browse_models.py \
-  --pipeline-tag text-generation \
-  --library gguf \
-  --language ru \
-  --file-regex "Q4_K_M\.gguf$" \
-  --yaml
-
-# 2. скопировать нужные записи в models.yaml, заполнить поля
-
-# 3. проверить доступность
-python scripts/download_models.py --dry-run --model saiga
-
-# 4. загрузить
-python scripts/download_models.py --model saiga
-```
-
-### Полный цикл через веб-интерфейс: найти → добавить → загрузить
-
-```bash
-# запустить браузер
 make ui
+# 1. вкладка «Поиск HuggingFace»: задать параметры → Искать → выбрать файлы
+# 2. Добавить выбранные → заполнить форму → Добавить в models.yaml
+# 3. вкладка «Мои модели»: убедиться что модели появились
+python scripts/download_models.py
+```
 
-# 1. вкладка «Поиск HuggingFace»:
-#    Автор: bartowski, Regex файлов: Q4_K_M\.gguf$ → Искать
-#    выбрать нужные файлы → Добавить выбранные
-#    заполнить форму → Добавить в models.yaml
+**Ollama:**
 
-# 2. вкладка «Мои модели»:
-#    убедиться что модели появились
-
-# 3. в терминале — загрузить новые модели:
-python scripts/download_models.py --model bartowski
+```bash
+make ui
+# 1. вкладка «Поиск Ollama»: ввести название → Искать
+# 2. нажать «▾ выбрать вариант» → выбрать нужный размер/квантизацию
+# 3. отметить чекбоксом → Добавить выбранные → заполнить форму → Добавить в models.yaml
+python scripts/download_models.py
 ```
 
 ---
@@ -621,6 +497,8 @@ cp credentials.yaml.example credentials.yaml
 # заполнить credentials.yaml
 cp .env.example .env
 # заполнить .env (HF_HUB_ENABLE_HF_TRANSFER=1)
+cp models.yaml.example models.yaml
+# заполнить/дополнить models.yaml
 
 python scripts/download_models.py --dry-run   # убедиться что всё ок
 python scripts/download_models.py             # загрузить
@@ -657,6 +535,7 @@ python scripts/download_models.py --model Phi-4
 make ui   # открывает http://localhost:9000 в браузере автоматически
 # Вкладка «Мои модели»: включить/отключить чекбоксы → Сохранить
 # Вкладка «Поиск HuggingFace»: найти новые → выбрать → добавить в models.yaml
+# Вкладка «Поиск Ollama»: найти модель → выбрать вариант → добавить в models.yaml
 python scripts/download_models.py   # загрузить новые включённые
 ```
 
@@ -670,45 +549,26 @@ python scripts/download_models.py --upload-s3
 python scripts/download_models.py --upload-s3 --delay 5
 ```
 
-### Поиск и загрузка модели одной командой (CLI)
+### Найти и добавить модель через веб-интерфейс
 
 ```bash
-# поиск → YAML → добавить в models.yaml → загрузить
-python scripts/browse_models.py \
-  --author unsloth \
-  --file-regex "Llama.*Q4_K_M\.gguf$" \
-  --yaml >> models_candidates.yaml
-
-# вручную перенести нужные записи из models_candidates.yaml в models.yaml
-python scripts/download_models.py --model Llama
+make ui
+# HuggingFace: вкладка «Поиск HuggingFace» → задать параметры → Искать
+#              → выбрать файлы → Добавить выбранные → заполнить форму
+# Ollama:      вкладка «Поиск Ollama» → ввести название → выбрать вариант
+#              → Добавить выбранные → заполнить форму
+python scripts/download_models.py   # загрузить добавленные модели
 ```
 
-### Поиск всех русскоязычных LLM в GGUF
+### Добавить Ollama-модель с конкретной квантизацией
 
 ```bash
-# все русские text-generation GGUF Q4_K_M
-python scripts/browse_models.py \
-  --pipeline-tag text-generation \
-  --library gguf \
-  --language ru \
-  --file-regex "Q4_K_M\.gguf$" \
-  --yaml
-```
-
-### Подобрать модель для image generation
-
-```bash
-# FLUX и SDXL в safetensors
-python scripts/browse_models.py \
-  --pipeline-tag text-to-image \
-  --library safetensors \
-  --limit 30
-
-# только от конкретных авторов
-python scripts/browse_models.py \
-  --pipeline-tag text-to-image \
-  --author black-forest-labs \
-  --file-regex "\.safetensors$"
+make ui
+# вкладка «Поиск Ollama» → ввести «qwen3» → Искать
+# нажать «▾ выбрать вариант» → выбрать «8b-q4_K_M»
+# отметить чекбоксом → Добавить выбранные
+# dest_dir: llm/qwen, теги: llm thinking tools 8b → Добавить в models.yaml
+python scripts/download_models.py --model qwen3
 ```
 
 ---
@@ -814,10 +674,11 @@ make security-check
 
 === Проверка .gitignore ===
 [OK]   credentials.yaml в .gitignore
+[OK]   models.yaml в .gitignore
 [OK]   .env в .gitignore
 [OK]   .download.lock в .gitignore
 
-=== Поиск credentials в коде ===
+=== Поиск credentials в коде (ложных позитивов быть не должно) ===
 [OK]   HF tokens не найдены в коде
 
 Security check complete.

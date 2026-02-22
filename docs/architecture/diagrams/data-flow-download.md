@@ -68,6 +68,28 @@ flowchart TD
     style S3_DONE fill:#e8f5e9,stroke:#388e3c
 ```
 
+## Ollama Download Flow
+
+```mermaid
+flowchart TD
+    START([User: download Ollama model]) --> PARSE_TAG["parse ollama_model\n'model' or 'model:tag'"]
+    PARSE_TAG --> GET_MANIFEST["GET /v2/library/{model}/manifests/{tag}\nfrom registry.ollama.ai\n→ config + layers"]
+    GET_MANIFEST --> FIND_GGUF["find GGUF layer\n(mediaType contains 'model')"]
+    FIND_GGUF --> CHECK_RANGE{Server supports\nRange requests?}
+    CHECK_RANGE -->|No| FULL_DL["GET /v2/library/{model}/blobs/{digest}\nfull download"]
+    CHECK_RANGE -->|Yes| CHECK_RESUME{Local partial\nfile exists?}
+    CHECK_RESUME -->|No| RANGE_DL["GET blob\nRange: bytes=0-"]
+    CHECK_RESUME -->|Yes| RESUME_DL["GET blob\nRange: bytes={offset}-\n(HTTP Resume)"]
+    FULL_DL --> WRITE["write to dest_path\nwith progress callback"]
+    RANGE_DL --> WRITE
+    RESUME_DL --> WRITE
+    WRITE --> DONE([File saved])
+
+    style START fill:#e1f5ff,stroke:#0288d1
+    style DONE fill:#e8f5e9,stroke:#388e3c
+    style RESUME_DL fill:#fff4e1,stroke:#f57c00
+```
+
 ## Web UI Save Flow
 
 ```mermaid

@@ -8,13 +8,13 @@ nodes:
     type: module
     layer: business
 
+  - id: ollama-hub
+    label: "ollama_hub.py\nOllama OCI Client"
+    type: module
+    layer: business
+
   - id: download-models
     label: "download_models.py\nModel Downloader"
-    type: script
-    layer: presentation
-
-  - id: browse-models
-    label: "browse_models.py\nHF Hub Browser"
     type: script
     layer: presentation
 
@@ -49,20 +49,20 @@ edges:
     type: required
     description: "reads HF token and S3 credentials (load_credentials)"
 
-  - from: browse-models
+  - from: ollama-hub
     to: utils
     type: required
-    description: "imports load_hf_token via sys.path"
-
-  - from: browse-models
-    to: credentials-config
-    type: required
-    description: "reads HF token for HuggingFace API authentication"
+    description: "imports fmt_size for size formatting"
 
   - from: model-browser
     to: utils
     type: required
     description: "imports fmt_size for disk size display in API response"
+
+  - from: model-browser
+    to: ollama-hub
+    type: required
+    description: "search, tags, size via /api/ollama/* endpoints"
 
   - from: model-browser
     to: models-config
@@ -74,5 +74,5 @@ statistics:
   edge_count: 7
   max_depth: 2
   circular_dependencies: none
-  most_depended_on: utils  # 3 incoming edges
+  most_depended_on: utils  # 2 incoming edges (download-models, ollama-hub, model-browser)
   most_dependencies: download-models  # 3 outgoing edges

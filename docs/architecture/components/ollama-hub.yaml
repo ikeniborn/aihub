@@ -1,0 +1,75 @@
+---
+# Component: Ollama OCI Client
+# Generated: 2026-02-22
+
+id: ollama-hub
+name: Ollama OCI Client
+layer: business
+path: scripts/ollama_hub.py
+type: module
+entry_point: false
+
+description: >
+  Client library for interacting with the Ollama ecosystem. Provides model
+  discovery via ollama.com web scraping, variant/tag listing from the tags page,
+  GGUF file size lookup via OCI manifest, and HTTP-resume GGUF download from the
+  OCI registry. Used by model_browser.py (Ollama search tab) and by
+  download_models.py (Ollama model download).
+
+key_behaviors:
+  search:
+    - Scrapes https://ollama.com/search?q={query} for model cards
+    - Returns: model name, description, pull count, tag count, capability tags
+    - Capability tags parsed from HTML: tools, thinking, vision, embedding, cloud
+  tags:
+    - Scrapes https://ollama.com/library/{model}/tags
+    - Regex: '<span class="group-hover:underline">{model}:{tag}</span>'
+    - Returns deduplicated list of tag strings (e.g. "8b", "8b-q4_K_M", "latest")
+    - Used for variant picker in web UI (grouped by base size with <optgroup>)
+  size_lookup:
+    - GET https://registry.ollama.ai/v2/library/{model}/manifests/{tag}
+    - Parses OCI manifest JSON to find GGUF layer (model mediaType)
+    - Returns size in bytes from layer descriptor
+  download:
+    - Resolves OCI manifest → finds GGUF blob digest
+    - Checks Range support via HEAD request
+    - Resumes partial downloads using Range: bytes={offset}- header
+    - Streams to file with progress callback (bytes_downloaded, total_bytes)
+  proxy:
+    - Session created via _get_session() with proxy support if configured
+
+dependencies:
+  internal:
+    - utils (fmt_size)
+  external:
+    - name: requests
+      usage: "HTTP requests to ollama.com and registry.ollama.ai"
+    - name: PyYAML
+      usage: "not directly; used by callers"
+
+public_api:
+  - "search_models(query, limit, capabilities) -> list[dict]  # {model_tag, description, pulls, params, tag_count, size}"
+  - "get_model_tags(model_name: str) -> list[str]"
+  - "get_model_info(model_tag: str) -> dict  # {size: int, digest: str, ...}"
+  - "download_model_gguf(model_tag, dest_path, progress_callback, retry_count, retry_delay) -> Path"
+
+rest_endpoints_served:
+  description: "Used by model_browser.py to expose these endpoints"
+  endpoints:
+    - "GET /api/ollama/search?q={query}  — returns search results JSON"
+    - "GET /api/ollama/tags?model={name}  — returns tag list JSON"
+    - "GET /api/ollama/size?model={tag}   — returns {size_bytes: N} JSON"
+
+external_services:
+  - url: "https://ollama.com/search"
+    method: HTML scraping
+    note: "No official API; scrapes model cards from HTML"
+  - url: "https://ollama.com/library/{model}/tags"
+    method: HTML scraping
+    note: "Scrapes <span class='group-hover:underline'> elements"
+  - url: "https://registry.ollama.ai/v2/library/{model}/manifests/{tag}"
+    method: OCI Distribution API
+    note: "Returns JSON manifest with layer digests and sizes"
+  - url: "https://registry.ollama.ai/v2/library/{model}/blobs/{digest}"
+    method: OCI Distribution API (HTTP GET with Range)
+    note: "Streams GGUF binary, supports HTTP Resume"

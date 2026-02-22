@@ -1,6 +1,6 @@
 ---
 # Component: Web UI Model Browser
-# Generated: 2026-02-20
+# Updated: 2026-02-22
 
 id: model-browser
 name: Web UI Model Browser
@@ -10,52 +10,120 @@ type: script
 entry_point: true
 
 description: >
-  Stdlib-only HTTP server providing a browser-based UI for managing the model
-  list. Embeds a complete single-page application as an inline HTML string.
-  No external web framework is used (no Flask/FastAPI). The UI provides
-  real-time filtering, download status indicators, enabled/disabled toggles,
-  and atomic saves to models.yaml.
+  Stdlib-only HTTP server providing a browser-based UI for managing AI models.
+  Embeds a complete single-page application as an inline HTML string.
+  No external web framework is used (no Flask/FastAPI). Three tabs:
+  (1) Мои модели — manage models.yaml list with filtering, inline edit, download
+  status; (2) Поиск HuggingFace — search HF Hub, select files, add to models.yaml;
+  (3) Поиск Ollama — search ollama.com, select variant, add to models.yaml.
+  Background download worker with SSE progress stream.
 
 architecture_notes:
-  server: "Python stdlib http.server.HTTPServer + BaseHTTPRequestHandler"
+  server: "Python stdlib http.server.HTTPServer + BaseHTTPRequestHandler + ThreadingMixIn"
   frontend: "Vanilla JS SPA embedded in HTML_PAGE string (no build step)"
   atomicity: "POST /api/save uses tempfile.mkstemp + os.replace for POSIX atomic write"
   handler_factory: "make_handler(config_path) creates a Handler class with config_path bound as class attribute"
+  download_worker: "threading.Thread + threading.Event for cancellation + SSE stream for progress"
 
 rest_api:
+  GET /api/settings:
+    description: "Return current settings from models.yaml (concurrency, bandwidth, timeout)"
+    response: "JSON {concurrency, bandwidth_limit, timeout_hours}"
+
+  POST /api/settings:
+    description: "Save settings back to models.yaml atomically"
+    request_body: "JSON {concurrency, bandwidth_limit, timeout_hours}"
+
   GET /api/models:
     description: "Return all model entries enriched with disk info"
     response: "JSON array of model objects"
-    model_fields: [repo_id, filename, dest_dir, enabled, gated, tags, description, downloaded, disk_size_bytes, disk_size_str]
+    model_fields: [repo_id, filename, dest_dir, enabled, gated, tags, description, downloaded, disk_size_bytes, disk_size_str, source, ollama_model]
 
   POST /api/save:
     description: "Atomically update enabled flags in models.yaml"
     request_body: "JSON {updates: [{repo_id, filename, enabled}]}"
     response_success: "HTTP 200 {status: ok, updated: N}"
-    response_error_400: "Invalid JSON or validation error"
-    response_error_500: "Filesystem or YAML error"
+
+  POST /api/delete:
+    description: "Delete model entry from models.yaml and optionally the file from disk"
+    request_body: "JSON {repo_id, filename, delete_file}"
+
+  GET /api/search:
+    description: "Search models. source=huggingface (default) or source=ollama"
+    query_params: "q, author, file_regex, pipeline_tag, language, limit, source"
+    response: "JSON {results: [...], count: N}"
+
+  POST /api/add:
+    description: "Add selected search results to models.yaml"
+    request_body: "JSON [{repo_id, filename, dest_dir, tags, description, source, ollama_model, ...}]"
+
+  GET /api/ollama/tags:
+    description: "List available variants (tags) for an Ollama model"
+    query_params: "model={model_name}"
+    response: "JSON {tags: [str, ...]}"
+
+  GET /api/ollama/size:
+    description: "Get GGUF file size for a specific Ollama model:tag via OCI manifest"
+    query_params: "model={model_tag}"
+    response: "JSON {size_bytes: int | null}"
+
+  POST /api/download/start:
+    description: "Start background download of all enabled models"
+    request_body: "JSON {concurrency?, bandwidth_limit?, timeout_hours?}"
+
+  GET /api/download/status:
+    description: "Lightweight poll of current download state"
+    response: "JSON {running, current, progress, status_map}"
+
+  GET /api/download/stream:
+    description: "SSE stream of download progress (log lines, progress, status_map)"
+    content_type: "text/event-stream"
+
+  POST /api/download/cancel:
+    description: "Cancel the currently running download"
 
   GET /:
     description: "Serve the SPA (HTML_PAGE string)"
 
 frontend_features:
-  - "Text search across repo_id, filename, description"
-  - "Tag filter buttons (multi-tag AND logic)"
-  - "Toggle: show only downloaded models"
-  - "Download status indicator (green dot = on disk, gray = not found)"
-  - "Enabled checkbox per model with change tracking"
-  - "Batch save with diff tracking (only changed models sent to server)"
-  - "Disk size display in human-readable format"
-  - "GATED badge for gated models"
+  tab_my_models:
+    - "Hierarchical grouping by dest_dir (up to 3 levels, collapsible)"
+    - "Text search across repo_id, filename, description"
+    - "Tag filter buttons (multi-tag AND logic)"
+    - "Toggle: show only downloaded models"
+    - "Download status indicator (green dot = on disk, gray = not found)"
+    - "Enabled checkbox per model with atomic save to models.yaml"
+    - "Inline edit (✎): tags, description, dest_dir, gated; dest_dir change moves file"
+    - "Delete (✕): removes entry + optionally file from disk"
+    - "Disk size display in human-readable format"
+    - "Background download with SSE progress bar and log, cancel button"
+  tab_hf_search:
+    - "Search by query, author, file_regex, pipeline_tag, language, limit"
+    - "Result table: repo_id, file size, download count, tags, description"
+    - "Multi-select checkboxes, batch add-to-models.yaml"
+    - "Pre-fill dest_dir/tags/description from search metadata"
+    - "Duplicate detection: existing models skipped"
+  tab_ollama_search:
+    - "Search by name on ollama.com"
+    - "Capability filter buttons (tools, thinking, vision, embedding, cloud) with counts"
+    - "Variant picker: '▾ выбрать вариант' button → <select> grouped by base size (0.5b/7b/14b/…)"
+    - "Async size refresh on variant change via /api/ollama/size"
+    - "(latest) badge on size before variant is selected"
+    - "Multi-select checkboxes, batch add-to-models.yaml"
 
 dependencies:
   internal:
     - utils (fmt_size)
+    - ollama-hub (search_models, get_model_tags, get_model_info)
     - models-config (models.yaml — read and write)
   external:
     - name: PyYAML
       usage: "yaml.safe_load for reading, yaml.dump for writing models.yaml"
-  stdlib_only: true  # no Flask, FastAPI, or other web frameworks
+    - name: python-dotenv
+      usage: "load_dotenv('.env') at startup"
+    - name: huggingface_hub
+      usage: "list_models, list_repo_files for HF search tab"
+  stdlib_only_webserver: true  # no Flask, FastAPI, or other web frameworks
 
 cli_interface:
   program: model_browser.py
@@ -63,6 +131,7 @@ cli_interface:
     - "--port PORT  : HTTP port (default: 9000)"
     - "--host HOST  : bind address (default: 127.0.0.1)"
     - "--config FILE: path to models.yaml (default: models.yaml)"
+    - "--open       : open browser automatically after start"
   exit_codes:
     0: "server stopped cleanly (Ctrl+C)"
     1: "config file not found or YAML parse error"
@@ -71,12 +140,15 @@ security:
   - "Binds to 127.0.0.1 by default (not exposed to network)"
   - "Use --host 0.0.0.0 explicitly for network access"
   - "YAML loaded with safe_load (no arbitrary code execution)"
+  - "dest_dir validated server-side: [a-z0-9_-/], max 3 levels, within models_dir only"
   - "Atomic writes prevent config corruption on power loss"
 
 makefile_targets:
-  - "make ui : opens http://localhost:9000"
+  - "make ui          : opens http://localhost:9000, auto-opens browser"
+  - "make ui PORT=X   : custom port"
+  - "make ui HOST=0.0.0.0 : expose to network"
 
 usage_examples:
   - "python scripts/model_browser.py"
-  - "python scripts/model_browser.py --port 8080"
+  - "python scripts/model_browser.py --port 8080 --open"
   - "python scripts/model_browser.py --host 0.0.0.0 --port 9000"

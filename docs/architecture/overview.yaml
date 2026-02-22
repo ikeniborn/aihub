@@ -10,8 +10,9 @@ project:
   python_version: ">=3.9"
   description: >
     CLI toolset for discovering, downloading, and managing open-source AI models
-    from HuggingFace Hub. Supports local storage and S3-compatible object storage
-    synchronization. Includes a web-based management UI.
+    from HuggingFace Hub and Ollama Registry. Supports local storage and
+    S3-compatible object storage synchronization. Includes a web-based management
+    UI with integrated HuggingFace and Ollama search.
   root: /home/ikeniborn/Documents/Project/aihub
 
 architecture:
@@ -93,40 +94,29 @@ components:
       - "--upload-s3"
       - "--s3-only"
 
-  - id: browse-models
-    name: HuggingFace Hub Browser
-    layer: presentation
-    path: scripts/browse_models.py
-    type: script
+  - id: ollama-hub
+    name: Ollama OCI Client
+    layer: business
+    path: scripts/ollama_hub.py
+    type: module
     description: >
-      CLI tool for discovering AI models on HuggingFace Hub via the Hub API.
-      Supports full-text search, author filtering, tag filtering, regex filtering
-      on model IDs, and regex filtering on repository file names. Can output
-      search results as a YAML snippet ready to paste into models.yaml.
-    entry_point: true
+      Client library for interacting with the Ollama ecosystem. Provides model
+      search via ollama.com web scraping, tag listing (variants/quantizations)
+      by scraping the ollama.com/library/{model}/tags page, GGUF size lookup
+      via OCI manifest from registry.ollama.ai, and HTTP-resume GGUF download
+      directly from the OCI registry. Used by model_browser.py for the Ollama
+      search tab and by download_models.py for Ollama model downloads.
+    entry_point: false
     public_api:
-      - main() -> int
-      - search_models(...) -> list
-      - list_files_for_repo(model_id, file_regex, token) -> list[str]
-      - to_yaml_snippet(models, file_map) -> str
+      - search_models(query) -> list[dict]
+      - get_model_tags(model_name) -> list[str]
+      - get_model_info(model_tag) -> dict
+      - download_model(model_tag, dest_path, progress_cb) -> None
     dependencies:
       - utils
-      - credentials-config
     external_deps:
-      - huggingface_hub
+      - requests
       - PyYAML
-      - python-dotenv
-    cli_flags:
-      - "--query TEXT"
-      - "--author NAME"
-      - "--tags TAG ..."
-      - "--regex PATTERN"
-      - "--sort downloads|likes|lastModified"
-      - "--limit N"
-      - "--show-files"
-      - "--file-regex PATTERN"
-      - "--yaml"
-      - "--creds FILE"
 
   - id: model-browser
     name: Web UI Model Browser
@@ -136,20 +126,35 @@ components:
     description: >
       HTTP server providing a web-based management interface for AI models.
       Uses only Python standard library (http.server, json, pathlib, tempfile).
-      Serves a single-page application with filtering by text/tags, download
-      status indicators, enabled/disabled toggles, and atomic saves back to
-      models.yaml. Exposes two REST API endpoints: GET /api/models and
-      POST /api/save.
+      Serves a single-page application with three tabs: model list management,
+      HuggingFace search, and Ollama search. Features: filtering by text/tags,
+      download status indicators, enabled/disabled toggles, inline editing,
+      atomic saves to models.yaml, HuggingFace model search and add workflow,
+      Ollama model search with capability filtering, variant picker with
+      optgroup grouping by size, and async size refresh via OCI manifest.
     entry_point: true
     public_api:
       - main() -> int
       - get_models_json(config_path) -> list[dict]
       - save_models(config_path, updates) -> None
     rest_api:
-      - "GET  /api/models  — list models enriched with disk info"
-      - "POST /api/save    — atomically update enabled flags in models.yaml"
+      - "GET  /api/settings                       — read settings from models.yaml"
+      - "POST /api/settings                       — save settings to models.yaml"
+      - "GET  /api/models                         — list models enriched with disk info"
+      - "POST /api/save                           — atomically update enabled flags"
+      - "POST /api/delete                         — delete model entry + file"
+      - "GET  /api/search?q=&source=huggingface   — search HuggingFace Hub"
+      - "GET  /api/search?q=&source=ollama        — search Ollama registry"
+      - "POST /api/add                            — add selected models to models.yaml"
+      - "GET  /api/ollama/tags?model={name}       — list variants for an Ollama model"
+      - "GET  /api/ollama/size?model={tag}        — get GGUF size for a model:tag"
+      - "POST /api/download/start                 — start background download"
+      - "GET  /api/download/status                — poll current download state"
+      - "GET  /api/download/stream                — SSE stream of download progress"
+      - "POST /api/download/cancel               — cancel current download"
     dependencies:
       - utils
+      - ollama-hub
       - models-config
     external_deps:
       - PyYAML
@@ -186,6 +191,10 @@ components:
         - gated (bool, default: false)
         - tags (list[str])
         - description (str)
+        - source (str, optional: "ollama" for Ollama models)
+        - ollama_model (str, optional: "model" or "model:tag" for Ollama)
+        - s3_synced (bool, auto-generated after S3 sync)
+        - s3_key (str, auto-generated after S3 sync)
     dependencies: []
 
   - id: credentials-config
@@ -237,18 +246,18 @@ dependency_graph:
       to: credentials-config
       type: required
       description: "reads HF token and S3 credentials"
-    - from: browse-models
+    - from: ollama-hub
       to: utils
       type: required
-      description: "imports load_hf_token via sys.path"
-    - from: browse-models
-      to: credentials-config
-      type: required
-      description: "reads HF token for API access"
+      description: "imports fmt_size for size formatting"
     - from: model-browser
       to: utils
       type: required
       description: "imports fmt_size for disk size display"
+    - from: model-browser
+      to: ollama-hub
+      type: required
+      description: "search, tags, size lookup for Ollama search tab"
     - from: model-browser
       to: models-config
       type: required
@@ -286,8 +295,8 @@ quality_attributes:
     description: >
       Three interfaces for different workflows: Makefile targets for common
       operations, CLI scripts with rich --help output, and a web UI for visual
-      management. YAML output from browse_models.py can be pasted directly into
-      models.yaml.
+      management. The web UI integrates HuggingFace and Ollama search with
+      direct add-to-models.yaml workflow.
 
 warnings: []
 circular_dependencies: []
@@ -295,12 +304,12 @@ circular_dependencies: []
 build:
   tool: Makefile
   targets:
-    - "setup   — python3 -m venv .venv && pip install -r requirements.txt"
+    - "setup    — python3 -m venv .venv && pip install -r requirements.txt"
     - "download — .venv/bin/python scripts/download_models.py"
     - "list     — .venv/bin/python scripts/download_models.py --list"
-    - "browse   — .venv/bin/python scripts/browse_models.py"
     - "ui       — .venv/bin/python scripts/model_browser.py"
     - "update   — .venv/bin/pip install --upgrade -r requirements.txt"
+    - "security-check — check credentials.yaml permissions + .gitignore coverage"
   package_manager: pip / uv
   config_files:
     - pyproject.toml   # PEP 517, uv-compatible
@@ -311,6 +320,16 @@ external_integrations:
     type: api
     library: huggingface_hub
     usage: "model search (list_models), file listing (list_repo_files), download (hf_hub_download), ETag (get_hf_file_metadata)"
+
+  - name: Ollama Registry
+    type: api
+    library: requests
+    endpoints:
+      - "https://ollama.com/search?q={query}  — model search (HTML scraping)"
+      - "https://ollama.com/library/{model}/tags  — variant tag listing (HTML scraping)"
+      - "https://registry.ollama.ai/v2/library/{model}/manifests/{tag}  — OCI manifest (GGUF size)"
+      - "https://registry.ollama.ai/v2/library/{model}/blobs/{digest}  — GGUF download (HTTP resume)"
+    usage: "model discovery, variant/quantization listing, GGUF size lookup, HTTP-resume download"
 
   - name: S3-Compatible Object Storage
     type: storage

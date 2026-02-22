@@ -61,10 +61,10 @@ dependencies:
 
 consumers:
   - download-models
-  - browse-models
+  - ollama-hub
   - model-browser
 
 notes:
-  - "All three scripts insert scripts/ into sys.path before importing utils"
+  - "Scripts insert scripts/ into sys.path before importing utils"
   - "fmt_size is also reimplemented in JavaScript inside model_browser.py HTML (fmtSize)"
   - "apply_to_env() uses setdefault so it never overrides proxy vars already set in the shell"

@@ -89,64 +89,6 @@ python scripts/download_models.py --max-concurrency 2 --download-timeout 3
 
 ---
 
-## Поиск моделей (browse_models.py)
-
-Переменные задают дефолты для `browse_models.py`; CLI-аргументы всегда имеют приоритет.
-
-```dotenv
-# Задача модели — что умеет делать модель (pipeline_tag на HuggingFace).
-# Значения: text-generation | text-to-image | automatic-speech-recognition |
-#           sentence-similarity | text-classification | text-to-speech |
-#           translation | image-classification | zero-shot-classification
-# CLI: --pipeline-tag
-BROWSE_PIPELINE_TAG=text-generation
-
-# Формат / библиотека — в каком виде хранится модель.
-# Значения: gguf | safetensors | transformers | diffusers |
-#           onnx | sentence-transformers | mlx | openvino
-# CLI: --library
-BROWSE_LIBRARY=gguf
-
-# Язык модели (ISO 639-1). Пусто — без фильтра по языку.
-# Значения: ru | en | zh | de | fr | ja | ko | ...
-# CLI: --language
-# BROWSE_LANGUAGE=ru
-
-# Regex-фильтр по именам файлов внутри репозитория.
-# CLI: --file-regex
-# Примеры:
-#   Q4_K_M\.gguf$          — только Q4_K_M квантизация
-#   Q[458]_K_[MS]\.gguf$   — Q4/Q5/Q8 в вариантах K_M и K_S
-#   \.safetensors$          — только safetensors
-BROWSE_FILE_REGEX=Q4_K_M\.gguf$
-```
-
-### Пример: дефолты для работы с русскоязычными GGUF LLM
-
-```dotenv
-BROWSE_PIPELINE_TAG=text-generation
-BROWSE_LIBRARY=gguf
-BROWSE_LANGUAGE=ru
-BROWSE_FILE_REGEX=Q4_K_M\.gguf$
-```
-
-После настройки достаточно:
-
-```bash
-python scripts/browse_models.py --author bartowski   # применит все 4 дефолта
-python scripts/browse_models.py --query "saiga"      # то же самое
-```
-
-### Пример: дефолты для image generation
-
-```dotenv
-BROWSE_PIPELINE_TAG=text-to-image
-BROWSE_LIBRARY=safetensors
-# BROWSE_FILE_REGEX — оставить пустым, safetensors-репо часто без лишних файлов
-```
-
----
-
 ## S3 / Object Storage
 
 ```dotenv
@@ -173,14 +115,10 @@ S3_PREFIX=models
 
 ## Примеры готовых `.env`
 
-### Локальная разработка, только GGUF LLM
+### Локальная разработка, минимальная конфигурация
 
 ```dotenv
 # HF_XET_HIGH_PERFORMANCE=1   # раскомментировать для максимальной скорости
-
-BROWSE_PIPELINE_TAG=text-generation
-BROWSE_LIBRARY=gguf
-BROWSE_FILE_REGEX=Q4_K_M\.gguf$
 ```
 
 ### Корпоративная сеть с proxy + Yandex Object Storage
@@ -192,18 +130,12 @@ PROXY_URL=http://proxy.corp.example.com:3128
 S3_BUCKET=ai-models-prod
 S3_REGION=ru-central1
 S3_ENDPOINT_URL=https://storage.yandexcloud.net
-
-BROWSE_PIPELINE_TAG=text-generation
-BROWSE_LIBRARY=gguf
-BROWSE_LANGUAGE=ru
-BROWSE_FILE_REGEX=Q4_K_M\.gguf$
 ```
 
-### Image generation (ComfyUI / A1111)
+### AWS S3 с автосинхронизацией
 
 ```dotenv
-# HF_XET_HIGH_PERFORMANCE=1   # раскомментировать для максимальной скорости
-
-BROWSE_PIPELINE_TAG=text-to-image
-BROWSE_LIBRARY=safetensors
+S3_BUCKET=my-ai-models
+S3_REGION=us-east-1
+S3_PREFIX=models
 ```
