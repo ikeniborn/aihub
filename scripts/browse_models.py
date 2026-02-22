@@ -2,7 +2,7 @@
 """
 AI Model Browser
 ================
-Ищет модели на HuggingFace Hub по API.
+Ищет модели на HuggingFace Hub или Ollama по API.
 Поддерживает regex-фильтрацию по названию, автору, тегам и именам файлов.
 Выводит таблицу результатов или YAML-фрагмент для вставки в models.yaml.
 
@@ -13,6 +13,8 @@ AI Model Browser
     python scripts/browse_models.py --tags gguf text-generation --limit 30
     python scripts/browse_models.py --query "embedding" --show-files --yaml
     python scripts/browse_models.py --author unsloth --file-regex ".*14B.*Q4.*" --yaml
+    python scripts/browse_models.py --source ollama --query "llama"
+    python scripts/browse_models.py --source ollama --query "qwen" --yaml
 """
 
 from __future__ import annotations
@@ -190,6 +192,73 @@ def to_yaml_snippet(models: list, file_map: dict[str, list[str]]) -> str:
     return yaml.dump(entries, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def print_ollama_table(results: list[dict]) -> None:
+    """Выводит таблицу результатов поиска Ollama."""
+    if not results:
+        print("Ничего не найдено на Ollama.")
+        return
+
+    print(
+        f"\n{'#':<4}  {'MODEL TAG':<42}  {'PARAMS':<10}  {'QUANT':<16}  {'PULLS':>8}  DESCRIPTION"
+    )
+    print("-" * 120)
+    for i, m in enumerate(results, 1):
+        tag = str(m.get("model_tag", ""))[:42]
+        params = str(m.get("params", "") or "")[:10]
+        quant = str(m.get("quantization", "") or "")[:16]
+        pulls = int(m.get("pulls", 0) or 0)
+        desc = str(m.get("description", "") or "")
+        desc_short = desc[:50] + "..." if len(desc) > 50 else desc
+        pulls_str = f"{pulls:,}" if pulls else "-"
+        print(f"{i:<4}  {tag:<42}  {params:<10}  {quant:<16}  {pulls_str:>8}  {desc_short}")
+    print(f"\nНайдено: {len(results)} моделей\n")
+
+
+def to_yaml_snippet_ollama(results: list[dict]) -> str:
+    """
+    Генерирует YAML-фрагмент для Ollama моделей для вставки в models.yaml.
+
+    For Ollama entries the YAML includes source: ollama and ollama_model: <tag>.
+    repo_id is set to 'ollama/{model}' and filename is derived from the model tag.
+    """
+    entries = []
+    for m in results:
+        model_tag = str(m.get("model_tag", ""))
+        if not model_tag:
+            continue
+        # Derive repo_id and filename from model_tag
+        # model_tag format: 'model[:tag]' or 'user/model[:tag]'
+        if "/" in model_tag:
+            namespace, rest = model_tag.split("/", 1)
+        else:
+            namespace = "library"
+            rest = model_tag
+
+        if ":" in rest:
+            model_name, tag_part = rest.split(":", 1)
+            filename = f"{model_name}-{tag_part}.gguf"
+        else:
+            model_name = rest
+            tag_part = "latest"
+            filename = f"{model_name}.gguf"
+
+        repo_id = f"ollama/{model_name}"
+        entry = {
+            "repo_id": repo_id,
+            "filename": filename,
+            "dest_dir": "misc",
+            "enabled": False,
+            "gated": False,
+            "tags": [],
+            "description": str(m.get("description", "") or ""),
+            "source": "ollama",
+            "ollama_model": model_tag,
+        }
+        entries.append(entry)
+
+    return yaml.dump(entries, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
 # ─── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -201,6 +270,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     search_group = p.add_argument_group("Поиск")
+    search_group.add_argument(
+        "--source",
+        choices=["huggingface", "ollama"],
+        default="huggingface",
+        help="Источник для поиска моделей: huggingface (по умолчанию) или ollama",
+    )
     search_group.add_argument(
         "--query", "-q",
         metavar="TEXT",
@@ -303,6 +378,41 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
+    # For Ollama source, only --query and --limit are relevant
+    if args.source == "ollama":
+        load_dotenv(dotenv_path=".env", override=False)
+        from utils import load_proxy_config, mask_proxy_url
+        proxy_cfg = load_proxy_config(Path(args.creds))
+        if proxy_cfg.valid:
+            proxy_cfg.apply_to_env()
+            print(f"[INFO] Proxy enabled: {mask_proxy_url(proxy_cfg.url)}")
+
+        query = args.query or None
+        limit = getattr(args, "limit", 20)
+        print(f"[INFO] Поиск Ollama: query={query!r}  (limit={limit})")
+
+        try:
+            import ollama_hub
+            results = ollama_hub.search_models(query=query, limit=limit)
+        except Exception as exc:
+            print(f"[ERROR] Ошибка Ollama поиска: {exc}", file=sys.stderr)
+            return 1
+
+        if not results:
+            print("Ничего не найдено на Ollama. Попробуйте изменить параметры поиска.")
+            return 0
+
+        print_ollama_table(results)
+
+        if args.yaml:
+            print("# ── YAML-фрагмент для models.yaml ─────────────────────────────────────────")
+            print("# Скопируйте нужные записи в раздел 'models:' файла models.yaml.")
+            print("# Заполните: dest_dir, tags, description, enabled: true\n")
+            print(to_yaml_snippet_ollama(results))
+
+        return 0
+
+    # ── HuggingFace source (default) ──────────────────────────────────────────
     if not any([args.query, args.author, args.tags, args.regex,
                 args.pipeline_tag, args.library, args.language]):
         print(
