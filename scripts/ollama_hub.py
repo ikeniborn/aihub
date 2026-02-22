@@ -472,21 +472,29 @@ def _fetch_sizes_parallel(model_names: list[str], timeout: int = 20) -> dict[str
     return results
 
 
-def search_models(query: Optional[str] = None, limit: int = 20) -> list[dict]:
+def search_models(
+    query: Optional[str] = None,
+    limit: int = 20,
+    capabilities: Optional[list] = None,
+) -> list[dict]:
     """
     Search Ollama models.
 
-    Primary: GET https://ollama.com/search?q={query} — HTML card parsing.
+    Primary: GET https://ollama.com/search?q={query}&c={cap} — HTML card parsing.
     Fallback: /api/tags for top models when HTML yields no results.
 
-    After getting model names, fetches OCI manifests in parallel to get
-    the GGUF file size (latest variant) for each model.
+    Args:
+      query:        Search query string.
+      limit:        Maximum number of results to return.
+      capabilities: Optional list of capability filter values to pass as ?c= to
+                    ollama.com (e.g. ['tools', 'thinking']). Multiple values produce
+                    separate requests whose results are merged and de-duplicated.
 
     Returns list[dict] with keys:
       model_tag (str):    e.g. 'llama3.2'
       description (str):  model description
       pulls (int):        download count
-      params (str):       capability tags (tools, vision, cloud, …)
+      params (str):       capability tags (tools, vision, cloud, thinking, embedding, …)
       quantization (str): quantization level (empty — resolved per-tag, not globally)
       tag_count (int):    number of available tags/variants
       size (int):         GGUF file size in bytes for the :latest variant (0 if unknown)
@@ -501,18 +509,37 @@ def search_models(query: Optional[str] = None, limit: int = 20) -> list[dict]:
     })
     results: list[dict] = []
 
-    try:
-        params: dict = {}
-        if query:
-            params["q"] = query
-        resp = session.get(_SEARCH_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        results = _parse_ollama_search_html(resp.text, limit)
-    except Exception as exc:
-        print(
-            f"[WARN] ollama_hub: HTML search failed ({exc}), trying /api/tags fallback",
-            file=sys.stderr,
-        )
+    # Build list of (q, c) request pairs: one per capability filter, or one without
+    requests_args: list[tuple] = []
+    if capabilities:
+        for cap in capabilities:
+            cap = str(cap).strip().lower()
+            if cap:
+                requests_args.append((query, cap))
+    if not requests_args:
+        requests_args = [(query, None)]
+
+    seen_tags: set = set()
+    for req_q, req_cap in requests_args:
+        try:
+            req_params: dict = {}
+            if req_q:
+                req_params["q"] = req_q
+            if req_cap:
+                req_params["c"] = req_cap
+            resp = session.get(_SEARCH_URL, params=req_params, timeout=15)
+            resp.raise_for_status()
+            page_results = _parse_ollama_search_html(resp.text, limit)
+            for r in page_results:
+                tag = r.get("model_tag", "")
+                if tag and tag not in seen_tags:
+                    seen_tags.add(tag)
+                    results.append(r)
+        except Exception as exc:
+            print(
+                f"[WARN] ollama_hub: HTML search failed ({exc}), trying /api/tags fallback",
+                file=sys.stderr,
+            )
 
     # R4 fallback: if scrape returned nothing, try /api/tags
     if not results:

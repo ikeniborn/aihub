@@ -872,10 +872,24 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
         </div>
       </div>
-      <!-- Ollama capability filter — показывается динамически после поиска -->
-      <div id="ollama-caps-row" style="display:none;margin-top:6px">
+      <!-- Строка Ollama: фильтр возможностей для поиска (только при source=ollama) -->
+      <div id="ollama-search-caps-row" class="hf-filters-row" style="display:none">
         <div class="hf-filter-group">
-          <label>Возможности</label>
+          <label>Фильтр возможностей <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">можно выбрать несколько</span></label>
+          <div class="filter-chips" id="ollama-search-caps">
+            <span class="filter-chip active" data-cap="" onclick="toggleOllamaSearchCap(this)" title="Все модели">Все</span>
+            <span class="filter-chip" data-cap="tools" onclick="toggleOllamaSearchCap(this)" title="Поддержка вызова инструментов (function calling)">tools</span>
+            <span class="filter-chip" data-cap="thinking" onclick="toggleOllamaSearchCap(this)" title="Режим мышления / chain-of-thought (thinking mode)">thinking</span>
+            <span class="filter-chip" data-cap="vision" onclick="toggleOllamaSearchCap(this)" title="Работа с изображениями (multimodal)">vision</span>
+            <span class="filter-chip" data-cap="embedding" onclick="toggleOllamaSearchCap(this)" title="Модели для эмбеддингов (embedding)">embedding</span>
+            <span class="filter-chip" data-cap="cloud" onclick="toggleOllamaSearchCap(this)" title="Доступно через облако Ollama (Cloud inference)">cloud</span>
+          </div>
+        </div>
+      </div>
+      <!-- Ollama capability filter — показывается динамически ПОСЛЕ поиска -->
+      <div id="ollama-caps-row" class="hf-filters-row" style="display:none">
+        <div class="hf-filter-group">
+          <label>Фильтр результатов <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">по возможностям</span></label>
           <div class="filter-chips" id="ollama-caps-chips"></div>
         </div>
       </div>
@@ -1593,16 +1607,37 @@ let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated
 function onSourceChange() {
   const source = document.getElementById('hf-source').value;
   const isOllama = source === 'ollama';
-  // Hide HF-specific fields when Ollama source is selected
+  // HF-specific fields
   const authorField = document.getElementById('hf-author-field');
   if (authorField) authorField.style.display = isOllama ? 'none' : '';
   const pipelineField = document.getElementById('hf-pipeline-tag');
   if (pipelineField) pipelineField.closest('.hf-field').style.display = isOllama ? 'none' : '';
-  const filtersRow = document.querySelector('.hf-filters-row');
-  if (filtersRow) filtersRow.style.display = isOllama ? 'none' : '';
-  // Hide caps row until new search completes
+  // HF-only filters row (regex, language, size)
+  const hfFiltersRow = document.querySelector('.hf-filters-row:not(#ollama-search-caps-row):not(#ollama-caps-row)');
+  if (hfFiltersRow) hfFiltersRow.style.display = isOllama ? 'none' : '';
+  // Ollama pre-search capability selector
+  const searchCapsRow = document.getElementById('ollama-search-caps-row');
+  if (searchCapsRow) searchCapsRow.style.display = isOllama ? '' : 'none';
+  // Post-search result filter — hide until search completes
   const capsRow = document.getElementById('ollama-caps-row');
   if (capsRow) capsRow.style.display = 'none';
+}
+
+function toggleOllamaSearchCap(chip) {
+  const isAll = chip.dataset.cap === '';
+  if (isAll) {
+    // Activate "Все", deactivate others
+    document.querySelectorAll('#ollama-search-caps .filter-chip').forEach(c => {
+      c.classList.toggle('active', c.dataset.cap === '');
+    });
+  } else {
+    // Toggle specific cap; deactivate "Все"
+    chip.classList.toggle('active');
+    const allChip = document.querySelector('#ollama-search-caps .filter-chip[data-cap=""]');
+    const anyActive = [...document.querySelectorAll('#ollama-search-caps .filter-chip[data-cap]:not([data-cap=""])')]
+      .some(c => c.classList.contains('active'));
+    if (allChip) allChip.classList.toggle('active', !anyActive);
+  }
 }
 
 async function hfSearch() {
@@ -1644,7 +1679,12 @@ async function hfSearch() {
   const params = new URLSearchParams();
   params.set('source', source);
   if (q) params.set('q', q);
-  if (!isOllama) {
+  if (isOllama) {
+    // Collect selected capability pre-filters (c= parameter for ollama.com)
+    const activeCaps = [...document.querySelectorAll('#ollama-search-caps .filter-chip[data-cap]:not([data-cap=""]).active')]
+      .map(c => c.dataset.cap);
+    activeCaps.forEach(c => params.append('caps', c));
+  } else {
     if (author) params.set('author', author);
     if (fileRegex) params.set('file_regex', fileRegex);
     if (pipelineTag) params.set('pipeline_tag', pipelineTag);
@@ -1769,9 +1809,15 @@ function renderHfResults(results) {
 
         const tdTags = document.createElement('td');
         if (rawFiles.length > 1) tdTags.rowSpan = rawFiles.length;
-        tdTags.innerHTML = '<div class="tags-cell">' +
-          (r.tags || []).slice(0, 6).map(t => `<span class="tag">${escHtml(t)}</span>`).join('') +
-          '</div>';
+        // "N variants" tag gets a tooltip explaining it = number of size variants on ollama.com
+        const tagHtml = (r.tags || []).slice(0, 6).map(t => {
+          const isVariants = /^\d+\s+variants?$/i.test(t.trim());
+          const tip = isVariants
+            ? ` title="Количество вариантов размера/квантизации на ollama.com (7b, 14b, 32b…)"`
+            : '';
+          return `<span class="tag"${tip}>${escHtml(t)}</span>`;
+        }).join('');
+        tdTags.innerHTML = `<div class="tags-cell">${tagHtml}</div>`;
         tr.appendChild(tdTags);
       }
 
@@ -3127,6 +3173,8 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             pipeline_tag = qs.get("pipeline_tag", [None])[0] or None
             language     = qs.get("language", [None])[0] or None
             source       = qs.get("source", ["huggingface"])[0] or "huggingface"
+            # Ollama capability pre-filter (c= parameter for ollama.com)
+            ollama_caps  = qs.get("caps", [])  # list of capability strings
             try:
                 limit = int(qs.get("limit", ["20"])[0])
             except (ValueError, TypeError):
@@ -3141,7 +3189,9 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     )
                     return
                 try:
-                    ollama_results = _ollama_hub.search_models(query=query, limit=limit)
+                    ollama_results = _ollama_hub.search_models(
+                        query=query, limit=limit, capabilities=ollama_caps or None
+                    )
                     # Normalize to same shape expected by frontend:
                     # repo_id, downloads, likes, gated, pipeline_tag, tags, files, description
                     normalized = []
