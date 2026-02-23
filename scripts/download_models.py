@@ -1651,6 +1651,23 @@ def main() -> int:
 
     print(f"[INFO] Config: {config_path}  |  Models dir: {models_root}  |  Policy: {update_policy}")
 
+    # Early write-permission check (skip for s3-only: temp dir is always writable)
+    if not args.s3_only:
+        _check_dir = models_root
+        while not _check_dir.exists():
+            _check_dir = _check_dir.parent
+        if not os.access(_check_dir, os.W_OK):
+            _msg = (
+                f"[ERROR] No write permission for models_dir: {models_root}\n"
+                f"        Checked: {_check_dir}\n"
+                f"        Fix: sudo chown -R $(whoami) {_check_dir}"
+            )
+            if args.dry_run:
+                print(_msg.replace("[ERROR]", "[WARN] (dry-run)"))
+            else:
+                print(_msg, file=sys.stderr)
+                return 1
+
     # --list: show all and exit
     if args.list_models:
         print_model_list(all_models)
