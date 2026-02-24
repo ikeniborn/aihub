@@ -985,6 +985,9 @@ function switchTab(btn) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('tab-' + name).classList.add('active');
   btn.classList.add('active');
+  // If a download finished while this tab was inactive, refresh the model list
+  // so the user sees up-to-date status dots without having to reload the page.
+  if (name === 'my-models' && _dlDoneGuard) { loadModels(); }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2315,6 +2318,7 @@ function dlToggleLog() {
 
 let _dlEventSource = null;
 let _dlLastData = null;
+let _dlDoneGuard = false;  // prevents double-firing of dlDone()
 
 // ─── Shared SSE message handler ───────────────────────────────────────────────
 function _dlOnMessage(d) {
@@ -2372,7 +2376,24 @@ function dlAttach() {
     if (d.ping) return;  // heartbeat — ignore
     _dlOnMessage(d);
   };
-  _dlEventSource.onerror = function() { dlDone(); };
+  _dlEventSource.onerror = async function() {
+    // Don't blindly finalize — the connection may have dropped mid-download.
+    // Check actual server state: reconnect if still running, finish if done.
+    try {
+      const resp = await fetch('/api/download/status');
+      if (resp.ok) {
+        const d = await resp.json();
+        if (d.running) {
+          // Download still in progress — reconnect SSE after a short back-off.
+          setTimeout(dlAttach, 3000);
+          return;
+        }
+        // Download finished — feed the final snapshot into the UI before closing.
+        if (d && !_dlDoneGuard) { _dlOnMessage(d); }
+      }
+    } catch (_) { /* network unavailable — fall through to dlDone */ }
+    dlDone();
+  };
 }
 
 async function dlStart() {
@@ -2412,6 +2433,7 @@ async function dlStart() {
   }
 
   _dlLastData = null;
+  _dlDoneGuard = false;
   document.getElementById('dl-log').textContent = '';
   document.getElementById('dl-current').textContent = '—';
   document.getElementById('dl-progress-bar').classList.remove('indeterminate');
@@ -2421,6 +2443,8 @@ async function dlStart() {
 }
 
 function dlDone() {
+  if (_dlDoneGuard) return;
+  _dlDoneGuard = true;
   if (_dlEventSource) { _dlEventSource.close(); _dlEventSource = null; }
   const startBtn  = document.getElementById('dl-start-btn');
   const cancelBtn = document.getElementById('dl-cancel-btn');
@@ -3425,6 +3449,10 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                     self.wfile.flush()
                     if not snapshot["running"]:
+                        # Hold connection open briefly so the browser can process
+                        # the final onmessage before the connection closes and
+                        # triggers onerror — prevents the end-of-download race.
+                        time.sleep(1)
                         break
                     # SSE heartbeat ping every 30 s — keeps TCP alive and lets
                     # the browser detect a stalled connection sooner via onerror.
