@@ -28,7 +28,7 @@ HOST   ?= 127.0.0.1
 CONFIG ?= models.yaml
 
 ui:
-	$(VENV_PYTHON) scripts/model_browser.py --port $(PORT) --host $(HOST) --config $(CONFIG) --open
+	$(VENV_PYTHON) scripts/model_browser.py --port $(PORT) --host $(HOST) --config $(CONFIG)
 
 ## update — обновить все пакеты до последних версий
 update:
