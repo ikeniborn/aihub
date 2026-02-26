@@ -745,8 +745,30 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .btn-edit:hover { opacity: 1; background: #0c1e33; }
   .btn-edit.active { opacity: 1; background: #0f2d47; border-color: #3b82f6; }
+  /* ── Per-model S3 action buttons ── */
+  .btn-s3-upload {
+    background: none; border: 1px solid #14532d; border-radius: 4px;
+    color: #86efac; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-s3-upload:hover:not(:disabled) { opacity: 1; background: #052e16; }
+  .btn-s3-upload:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-s3-download {
+    background: none; border: 1px solid #1e3a5f; border-radius: 4px;
+    color: #93c5fd; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-s3-download:hover:not(:disabled) { opacity: 1; background: #082044; }
+  .btn-s3-download:disabled { opacity: 0.3; cursor: not-allowed; }
+  .s3-op-spinner {
+    display: inline-block; width: 10px; height: 10px;
+    border: 2px solid rgba(255,255,255,0.2); border-top-color: #38bdf8;
+    border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle;
+    margin-right: 2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
-  td.td-actions { width: 72px; text-align: center; white-space: nowrap; }
+  td.td-actions { width: 100px; text-align: center; white-space: nowrap; }
   /* ── Inline model edit row ── */
   .edit-row > td {
     padding: 0; background: #0a1120;
@@ -1492,6 +1514,61 @@ function renderModelRow(m, i) {
   btnDel.textContent = '✕';
   btnDel.title = 'Удалить модель (локально / S3 / везде)';
   btnDel.onclick = () => deleteModel(m);
+
+  // ── Per-model S3 upload/download buttons ──────────────────────────────
+  // S3 upload: shown when S3 is configured, file is downloaded locally, not yet in S3
+  // S3 download: shown when S3 is configured and file is in S3 but not downloaded locally
+  const s3OpRunning = m.s3_op_status === 'running';
+  const s3OpDone = m.s3_op_status === 'done';
+
+  if (m.s3_config_available) {
+    // Upload to S3 button: visible when downloaded locally (may or may not be in S3 already)
+    if (m.downloaded) {
+      const btnS3Upload = document.createElement('button');
+      btnS3Upload.className = 'btn-s3-upload';
+      if (s3OpRunning && m.s3_op_type === 'upload') {
+        btnS3Upload.innerHTML = '<span class="s3-op-spinner"></span>↑S3';
+        btnS3Upload.disabled = true;
+        btnS3Upload.title = 'Загрузка в S3...';
+      } else {
+        btnS3Upload.textContent = m.s3_synced ? '↑S3' : '↑S3';
+        btnS3Upload.disabled = s3OpRunning;
+        btnS3Upload.title = m.s3_synced
+          ? 'Переотправить в S3 (уже синхронизировано)'
+          : 'Загрузить модель в S3';
+        if (m.s3_synced) btnS3Upload.style.opacity = '0.4';
+      }
+      btnS3Upload.onclick = () => uploadToS3(m);
+      tdActions.append(' ', btnS3Upload);
+    }
+
+    // Download from S3 button: visible when model is in S3 but not downloaded locally
+    if (m.s3_available && !m.downloaded) {
+      const btnS3Download = document.createElement('button');
+      btnS3Download.className = 'btn-s3-download';
+      if (s3OpRunning && m.s3_op_type === 'download') {
+        btnS3Download.innerHTML = '<span class="s3-op-spinner"></span>↓S3';
+        btnS3Download.disabled = true;
+        btnS3Download.title = 'Скачивание из S3...';
+      } else {
+        btnS3Download.textContent = '↓S3';
+        btnS3Download.disabled = s3OpRunning;
+        btnS3Download.title = 'Скачать модель из S3 локально';
+      }
+      btnS3Download.onclick = () => downloadFromS3(m);
+      tdActions.append(' ', btnS3Download);
+    }
+
+    // Show error indicator if last S3 operation failed
+    if (m.s3_op_status === 'error') {
+      const errSpan = document.createElement('span');
+      errSpan.textContent = '⚠';
+      errSpan.style.cssText = 'color:#fbbf24;font-size:0.75rem;cursor:help;';
+      errSpan.title = 'S3 ошибка: ' + (m.s3_op_error || 'неизвестная ошибка');
+      tdActions.append(' ', errSpan);
+    }
+  }
+
   tdActions.append(btnEdit, ' ', btnDel);
 
   tr.append(tdCb, tdStatus, tdName, tdTags, tdSize, tdDesc, tdActions);
@@ -1829,6 +1906,100 @@ async function delModalConfirm() {
   } finally {
     _delTarget = null;
   }
+}
+
+// ── Per-model S3 upload/download actions ──────────────────────────────────────
+
+/**
+ * Upload a model file to S3.
+ * Follows the deleteModel() pattern: confirm → POST /api/s3/upload → poll status.
+ * Polls /api/s3/status every 2s until status is done/error, then refreshes model list.
+ */
+async function uploadToS3(m) {
+  const label = m.filename + ' (' + m.repo_id + ')';
+  const confirmMsg = m.s3_synced
+    ? `Переотправить модель в S3?\n\n${label}\n\nФайл уже синхронизирован. Перезаписать?`
+    : `Загрузить модель в S3?\n\n${label}`;
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const resp = await fetch('/api/s3/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Ошибка запуска загрузки в S3: ' + (data.error || 'HTTP ' + resp.status));
+      return;
+    }
+    // Refresh UI to show spinner, then poll for completion
+    await loadModels();
+    _pollS3Op(m.repo_id, m.filename, 'upload');
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+/**
+ * Download a model file from S3 to local disk.
+ * Follows the deleteModel() pattern: confirm → POST /api/s3/download → poll status.
+ * Polls /api/s3/status every 2s until done/error, then refreshes model list.
+ */
+async function downloadFromS3(m) {
+  const label = m.filename + ' (' + m.repo_id + ')';
+  if (!confirm(`Скачать модель из S3 на локальный диск?\n\n${label}`)) return;
+
+  try {
+    const resp = await fetch('/api/s3/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert('Ошибка запуска скачивания из S3: ' + (data.error || 'HTTP ' + resp.status));
+      return;
+    }
+    // Refresh UI to show spinner, then poll for completion
+    await loadModels();
+    _pollS3Op(m.repo_id, m.filename, 'download');
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+  }
+}
+
+/**
+ * Poll /api/s3/status every 2s until the operation is done or error.
+ * Refreshes model list on completion so UI reflects the new state.
+ * Mitigation R6: provides progress feedback via spinner (shown during running status).
+ */
+async function _pollS3Op(repoId, filename, opType) {
+  const maxPolls = 3600;  // 2h max = 3600 polls × 2s
+  let polls = 0;
+  const interval = setInterval(async () => {
+    polls++;
+    if (polls > maxPolls) {
+      clearInterval(interval);
+      return;
+    }
+    try {
+      const qs = `repo_id=${encodeURIComponent(repoId)}&filename=${encodeURIComponent(filename)}`;
+      const resp = await fetch('/api/s3/status?' + qs);
+      if (!resp.ok) { clearInterval(interval); return; }
+      const data = await resp.json();
+      if (data.status === 'done' || data.status === 'error') {
+        clearInterval(interval);
+        await loadModels();
+        if (data.status === 'error') {
+          const opLabel = opType === 'upload' ? 'Загрузка в S3' : 'Скачивание из S3';
+          alert(opLabel + ' завершилась с ошибкой:\n' + (data.error || 'Неизвестная ошибка'));
+        }
+      }
+    } catch (e) {
+      clearInterval(interval);
+    }
+  }, 2000);
 }
 
 async function loadModels() {
