@@ -1538,8 +1538,8 @@ function renderModelRow(m, i) {
   const s3OpRunning = m.s3_op_status === 'running';
 
   if (m.s3_config_available) {
-    // Upload to S3 button: visible when downloaded locally and not an Ollama model
-    if (m.downloaded && !isOllama) {
+    // Upload to S3 button: visible when downloaded locally (Ollama models are real GGUF files in models_dir)
+    if (m.downloaded) {
       const btnS3Upload = document.createElement('button');
       btnS3Upload.className = 'btn-s3-upload';
       if (s3OpRunning && m.s3_op_type === 'upload') {
