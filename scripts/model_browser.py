@@ -125,6 +125,251 @@ def _s3_object_key(dest_dir: str, filename: str, prefix: str) -> str:
     return f"{dest_dir}/{filename}"
 
 
+def s3_upload_model(
+    config_path: Path,
+    repo_id: str,
+    filename: str,
+) -> tuple[str, Optional[str], str]:
+    """
+    Upload a locally downloaded model file to S3.
+
+    Reuses the upload pattern from download_models.py (s3_upload_file):
+    multipart upload with 100MB chunks for large files.
+
+    Returns:
+        (status, error, s3_key) where status is "UPLOADED", "SKIP", or "ERROR".
+        s3_key is the S3 object key used (empty string on ERROR).
+
+    Idempotency: checks if object already exists in S3 with same size.
+    """
+    s3_cfg = _load_s3_config(config_path)
+    if not s3_cfg.valid:
+        return "ERROR", "S3 не настроен (отсутствуют credentials или bucket)", ""
+
+    raw = load_yaml(config_path)
+    settings: dict = raw.get("settings", {})
+    models_dir = Path(settings.get("models_dir", "./models"))
+    if not models_dir.is_absolute():
+        models_dir = config_path.parent / models_dir
+
+    # Find the model entry
+    target_item: Optional[dict] = None
+    for item in raw.get("models", []) or []:
+        if isinstance(item, dict) and item.get("repo_id") == repo_id and item.get("filename") == filename:
+            target_item = item
+            break
+
+    if target_item is None:
+        return "ERROR", f"Запись не найдена: {repo_id}::{filename}", ""
+
+    dest_dir = target_item.get("dest_dir", "misc")
+    local_file = models_dir / dest_dir / filename
+
+    if not local_file.is_file():
+        return "ERROR", f"Локальный файл не найден: {local_file}", ""
+
+    key = _s3_object_key(dest_dir, filename, s3_cfg.prefix)
+
+    try:
+        import boto3
+        from botocore.config import Config as BotocoreConfig
+        from boto3.s3.transfer import TransferConfig
+
+        kwargs: dict = {
+            "aws_access_key_id": s3_cfg.access_key_id,
+            "aws_secret_access_key": s3_cfg.secret_access_key,
+            "region_name": s3_cfg.region,
+        }
+        if s3_cfg.endpoint_url:
+            kwargs["endpoint_url"] = s3_cfg.endpoint_url
+
+        client = boto3.client("s3", **kwargs)
+
+        # Idempotency check: compare sizes
+        file_size = local_file.stat().st_size
+        try:
+            resp = client.head_object(Bucket=s3_cfg.bucket, Key=key)
+            remote_size = resp.get("ContentLength", -1)
+            if remote_size == file_size:
+                return "SKIP", None, key
+        except Exception as head_exc:
+            err_str = str(head_exc)
+            if not any(x in err_str for x in ("404", "NoSuchKey", "Not Found")):
+                return "ERROR", f"S3 head_object ошибка: {head_exc}", key
+
+        transfer_cfg = TransferConfig(
+            multipart_threshold=100 * 1024 * 1024,
+            multipart_chunksize=100 * 1024 * 1024,
+            max_concurrency=4,
+        )
+        endpoint_display = s3_cfg.endpoint_url or "s3.amazonaws.com"
+        print(
+            f"  [S3-UPLOAD] Uploading to s3://{s3_cfg.bucket}/{key}"
+            f"  [{endpoint_display}]  ({fmt_size(file_size)}) ..."
+        )
+        client.upload_file(
+            Filename=str(local_file),
+            Bucket=s3_cfg.bucket,
+            Key=key,
+            Config=transfer_cfg,
+        )
+        return "UPLOADED", None, key
+
+    except ImportError:
+        return "ERROR", "boto3 не установлен (pip install boto3)", key
+    except Exception as exc:
+        return "ERROR", str(exc), key
+
+
+def s3_download_model(
+    config_path: Path,
+    repo_id: str,
+    filename: str,
+) -> tuple[str, Optional[str]]:
+    """
+    Download a model file from S3 to local models_dir.
+
+    Implements disk space check before download and atomic write
+    via part file + os.replace() (same pattern as download_models.py).
+
+    Returns:
+        (status, error) where status is "DOWNLOADED" or "ERROR".
+    """
+    s3_cfg = _load_s3_config(config_path)
+    if not s3_cfg.valid:
+        return "ERROR", "S3 не настроен (отсутствуют credentials или bucket)"
+
+    raw = load_yaml(config_path)
+    settings: dict = raw.get("settings", {})
+    models_dir = Path(settings.get("models_dir", "./models"))
+    if not models_dir.is_absolute():
+        models_dir = config_path.parent / models_dir
+
+    # Find the model entry
+    target_item: Optional[dict] = None
+    for item in raw.get("models", []) or []:
+        if isinstance(item, dict) and item.get("repo_id") == repo_id and item.get("filename") == filename:
+            target_item = item
+            break
+
+    if target_item is None:
+        return "ERROR", f"Запись не найдена: {repo_id}::{filename}"
+
+    dest_dir = target_item.get("dest_dir", "misc")
+    local_file = models_dir / dest_dir / filename
+    local_file.parent.mkdir(parents=True, exist_ok=True)
+
+    key = _s3_object_key(dest_dir, filename, s3_cfg.prefix)
+
+    try:
+        import boto3
+        from botocore.config import Config as BotocoreConfig
+        from boto3.s3.transfer import TransferConfig
+
+        kwargs: dict = {
+            "aws_access_key_id": s3_cfg.access_key_id,
+            "aws_secret_access_key": s3_cfg.secret_access_key,
+            "region_name": s3_cfg.region,
+        }
+        if s3_cfg.endpoint_url:
+            kwargs["endpoint_url"] = s3_cfg.endpoint_url
+
+        client = boto3.client("s3", **kwargs)
+
+        # Get remote file size for disk space check
+        try:
+            resp = client.head_object(Bucket=s3_cfg.bucket, Key=key)
+            remote_size = int(resp.get("ContentLength", 0))
+        except Exception as head_exc:
+            return "ERROR", f"S3 head_object ошибка (объект недоступен): {head_exc}"
+
+        # Check disk space (R3 mitigation)
+        if remote_size > 0:
+            try:
+                disk = shutil.disk_usage(str(local_file.parent))
+                free_bytes = disk.free
+                if remote_size > free_bytes:
+                    return "ERROR", (
+                        f"Недостаточно места на диске: "
+                        f"требуется {fmt_size(remote_size)}, "
+                        f"доступно {fmt_size(free_bytes)}"
+                    )
+            except Exception:
+                pass  # Non-fatal: proceed even if disk check fails
+
+        # Atomic download via part file (same pattern as download_models.py)
+        part_file = Path(str(local_file) + ".part")
+        endpoint_display = s3_cfg.endpoint_url or "s3.amazonaws.com"
+        print(
+            f"  [S3-DOWNLOAD] Downloading from s3://{s3_cfg.bucket}/{key}"
+            f"  [{endpoint_display}]  ({fmt_size(remote_size)}) ..."
+        )
+
+        transfer_cfg = TransferConfig(
+            multipart_threshold=100 * 1024 * 1024,
+            multipart_chunksize=100 * 1024 * 1024,
+            max_concurrency=4,
+        )
+        client.download_file(
+            Bucket=s3_cfg.bucket,
+            Key=key,
+            Filename=str(part_file),
+            Config=transfer_cfg,
+        )
+        os.replace(str(part_file), str(local_file))
+        return "DOWNLOADED", None
+
+    except ImportError:
+        return "ERROR", "boto3 не установлен (pip install boto3)"
+    except Exception as exc:
+        # Clean up partial file on error
+        try:
+            part_file = Path(str(local_file) + ".part")
+            if part_file.is_file():
+                part_file.unlink()
+        except OSError:
+            pass
+        return "ERROR", str(exc)
+
+
+def _set_s3_metadata(
+    config_path: Path,
+    repo_id: str,
+    filename: str,
+    s3_synced: bool,
+    s3_key: str = "",
+) -> bool:
+    """
+    Atomically update s3_synced and s3_key in models.yaml for a model entry.
+
+    Replicates mark_model_s3_synced() pattern from download_models.py,
+    using _atomic_yaml_write() already available in model_browser.py context.
+
+    Args:
+        s3_synced: True after upload, False after S3 deletion.
+        s3_key:    S3 object key (set when s3_synced=True, empty when clearing).
+
+    Returns True on success, False on write error.
+    """
+    try:
+        raw = load_yaml(config_path)
+        for item in raw.get("models", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("repo_id") == repo_id and item.get("filename") == filename:
+                item["s3_synced"] = s3_synced
+                if s3_synced and s3_key:
+                    item["s3_key"] = s3_key
+                else:
+                    item.pop("s3_key", None)
+                break
+        _atomic_yaml_write(config_path, raw)
+        return True
+    except Exception as e:
+        print(f"  [WARN] _set_s3_metadata: не удалось обновить yaml: {e}", file=sys.stderr)
+        return False
+
+
 # ─── Threaded HTTP server ──────────────────────────────────────────────────────
 
 
@@ -160,6 +405,85 @@ download_state: DownloadState = {
     "done_count": 0,
     "status_map": {},
 }
+
+# ─── Per-Model S3 Operation State ─────────────────────────────────────────────
+# Tracks individual model upload/download operations triggered from UI.
+# Key: (repo_id, filename)  — unique per model file.
+# Value: {"status": "idle"|"running"|"done"|"error",
+#          "operation": "upload"|"download"|None,
+#          "error": str|None,
+#          "s3_key": str}
+_s3_op_lock: threading.Lock = threading.Lock()
+_s3_ops: dict = {}  # dict[(repo_id, filename), dict]
+
+
+def _s3_upload_worker(config_path: Path, repo_id: str, filename: str) -> None:
+    """
+    Background thread: upload a model file to S3.
+
+    Updates _s3_ops[(repo_id, filename)] state on start/completion.
+    Calls s3_upload_model() then _set_s3_metadata() on success.
+
+    Mitigation R1: long-running S3 upload runs in daemon thread, HTTP returns immediately.
+    """
+    key_tuple = (repo_id, filename)
+    with _s3_op_lock:
+        _s3_ops[key_tuple] = {"status": "running", "operation": "upload", "error": None, "s3_key": ""}
+
+    try:
+        status, error, s3_key = s3_upload_model(config_path, repo_id, filename)
+
+        if status == "UPLOADED":
+            # Persist s3_synced=True + s3_key in yaml
+            _set_s3_metadata(config_path, repo_id, filename, s3_synced=True, s3_key=s3_key)
+            print(f"  [S3-OK] Upload complete: {repo_id}::{filename} → s3_key={s3_key}")
+            with _s3_op_lock:
+                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key}
+        elif status == "SKIP":
+            print(f"  [S3-SKIP] Already in S3: {repo_id}::{filename}")
+            # Still mark as synced (may not have been marked previously)
+            if s3_key:
+                _set_s3_metadata(config_path, repo_id, filename, s3_synced=True, s3_key=s3_key)
+            with _s3_op_lock:
+                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key}
+        else:
+            print(f"  [S3-ERR] Upload failed: {repo_id}::{filename} — {error}", file=sys.stderr)
+            with _s3_op_lock:
+                _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": error or "Unknown error", "s3_key": ""}
+    except Exception as exc:
+        print(f"  [S3-ERR] Upload worker exception: {exc}", file=sys.stderr)
+        with _s3_op_lock:
+            _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": str(exc), "s3_key": ""}
+
+
+def _s3_download_worker(config_path: Path, repo_id: str, filename: str) -> None:
+    """
+    Background thread: download a model file from S3 to local models_dir.
+
+    Updates _s3_ops[(repo_id, filename)] state on start/completion.
+    Calls s3_download_model() — no yaml metadata update needed (s3_synced stays True).
+
+    Mitigation R1/R3: long-running download in daemon thread, disk space checked in s3_download_model().
+    """
+    key_tuple = (repo_id, filename)
+    with _s3_op_lock:
+        _s3_ops[key_tuple] = {"status": "running", "operation": "download", "error": None, "s3_key": ""}
+
+    try:
+        status, error = s3_download_model(config_path, repo_id, filename)
+
+        if status == "DOWNLOADED":
+            print(f"  [S3-DL-OK] Download complete: {repo_id}::{filename}")
+            with _s3_op_lock:
+                _s3_ops[key_tuple] = {"status": "done", "operation": "download", "error": None, "s3_key": ""}
+        else:
+            print(f"  [S3-DL-ERR] Download failed: {repo_id}::{filename} — {error}", file=sys.stderr)
+            with _s3_op_lock:
+                _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": error or "Unknown error", "s3_key": ""}
+    except Exception as exc:
+        print(f"  [S3-DL-ERR] Download worker exception: {exc}", file=sys.stderr)
+        with _s3_op_lock:
+            _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": str(exc), "s3_key": ""}
 
 
 def _check_stale_download_state() -> bool:
@@ -2608,6 +2932,14 @@ def get_models_json(config_path: Path) -> list[dict]:
     For each model, checks if the file exists at:
         {settings.models_dir}/{dest_dir}/{filename}
     and adds disk_size_bytes (int or 0) and downloaded (bool).
+
+    Also adds:
+        s3_config_available (bool) — True if S3 credentials are configured.
+            Used by the UI to show/hide per-model S3 upload/download buttons.
+        s3_op_status (str) — current per-model S3 operation status from _s3_ops:
+            "idle" | "running" | "done" | "error"
+        s3_op_type (str|None) — "upload" | "download" | None
+        s3_op_error (str|None) — error message if s3_op_status == "error"
     """
     raw = load_yaml(config_path)
     settings: dict = raw.get("settings", {})
@@ -2615,6 +2947,9 @@ def get_models_json(config_path: Path) -> list[dict]:
 
     if not models_dir.is_absolute():
         models_dir = config_path.parent / models_dir
+
+    # Check S3 config once per request (avoids N reads for N models)
+    s3_config_available: bool = _load_s3_config(config_path).valid
 
     result = []
     for item in raw.get("models", []):
@@ -2629,6 +2964,13 @@ def get_models_json(config_path: Path) -> list[dict]:
         local_file = models_dir / dest_dir / filename
         downloaded = local_file.is_file()
         disk_size_bytes = int(local_file.stat().st_size) if downloaded else 0
+
+        # Per-model S3 operation status from in-memory state
+        with _s3_op_lock:
+            op_state = _s3_ops.get((repo_id, filename), {})
+        s3_op_status = op_state.get("status", "idle")
+        s3_op_type = op_state.get("operation")
+        s3_op_error = op_state.get("error")
 
         result.append({
             "repo_id": repo_id,
@@ -2646,6 +2988,13 @@ def get_models_json(config_path: Path) -> list[dict]:
             # s3_available: True only when both s3_synced flag and s3_key are set.
             # Used by the delete modal to enable/disable S3 scope options.
             "s3_available": bool(item.get("s3_synced", False)) and bool(item.get("s3_key", "")),
+            # s3_config_available: True if S3 credentials are configured.
+            # Used by UI to show/hide per-model S3 upload/download buttons.
+            "s3_config_available": s3_config_available,
+            # Per-model S3 operation tracking (populated from _s3_ops)
+            "s3_op_status": s3_op_status,
+            "s3_op_type": s3_op_type,
+            "s3_op_error": s3_op_error,
             # Source info for badge display (HF / OLLAMA)
             "source": str(item.get("source", "huggingface") or "huggingface"),
             "ollama_model": str(item.get("ollama_model", "") or ""),
@@ -3469,6 +3818,21 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass  # Client disconnected — download continues in background
 
+        elif path == "/api/s3/status":
+            # Return current S3 operation status for a specific model.
+            # Used by UI to poll progress of per-model upload/download operations.
+            # Query params: ?repo_id=...&filename=...
+            qs = parse_qs(parsed.query)
+            repo_id = (qs.get("repo_id", [None])[0] or "").strip()
+            filename = (qs.get("filename", [None])[0] or "").strip()
+            if not repo_id or not filename:
+                self._send_json({"error": "repo_id и filename обязательны"}, status=400)
+                return
+            key_tuple = (repo_id, filename)
+            with _s3_op_lock:
+                op = _s3_ops.get(key_tuple, {"status": "idle", "operation": None, "error": None, "s3_key": ""})
+            self._send_json(op)
+
         else:
             self._send_json({"error": "Not found"}, status=404)
 
@@ -3638,6 +4002,94 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     s3_cfg = _load_s3_config(self.config_path)
                 result = delete_model(self.config_path, repo_id, filename, scope=scope, s3_cfg=s3_cfg)
                 self._send_json({"status": "ok", **result})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/s3/upload":
+            # Start background upload of a single model to S3.
+            # Mitigation R1: runs in daemon thread, HTTP returns {status: "started"} immediately.
+            # Mitigation R4: rejects if operation already running for this model.
+            try:
+                repo_id = str(payload.get("repo_id", "")).strip()
+                filename = str(payload.get("filename", "")).strip()
+                if not repo_id or not filename:
+                    raise ValueError("repo_id и filename обязательны")
+                if Path(filename).name != filename:
+                    raise ValueError(f"Недопустимое имя файла: '{filename}'")
+
+                key_tuple = (repo_id, filename)
+                with _s3_op_lock:
+                    current_op = _s3_ops.get(key_tuple, {})
+                    if current_op.get("status") == "running":
+                        self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
+                        return
+
+                # Check S3 config before starting
+                s3_cfg_check = _load_s3_config(self.config_path)
+                if not s3_cfg_check.valid:
+                    self._send_json({"error": "S3 не настроен (отсутствуют credentials или bucket)"}, status=400)
+                    return
+
+                t = threading.Thread(
+                    target=_s3_upload_worker,
+                    args=(self.config_path, repo_id, filename),
+                    daemon=True,
+                )
+                t.start()
+                self._send_json({"status": "started", "repo_id": repo_id, "filename": filename})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/s3/download":
+            # Start background download of a single model from S3 to local disk.
+            # Mitigation R3: disk space checked inside s3_download_model() before transfer.
+            # Mitigation R4: rejects if operation already running for this model.
+            try:
+                repo_id = str(payload.get("repo_id", "")).strip()
+                filename = str(payload.get("filename", "")).strip()
+                if not repo_id or not filename:
+                    raise ValueError("repo_id и filename обязательны")
+                if Path(filename).name != filename:
+                    raise ValueError(f"Недопустимое имя файла: '{filename}'")
+
+                key_tuple = (repo_id, filename)
+                with _s3_op_lock:
+                    current_op = _s3_ops.get(key_tuple, {})
+                    if current_op.get("status") == "running":
+                        self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
+                        return
+
+                # Check S3 config + that model is in S3 before starting
+                s3_cfg_check = _load_s3_config(self.config_path)
+                if not s3_cfg_check.valid:
+                    self._send_json({"error": "S3 не настроен (отсутствуют credentials или bucket)"}, status=400)
+                    return
+
+                # Verify model is marked as synced to S3 in yaml
+                raw = load_yaml(self.config_path)
+                target_item = None
+                for item in raw.get("models", []) or []:
+                    if isinstance(item, dict) and item.get("repo_id") == repo_id and item.get("filename") == filename:
+                        target_item = item
+                        break
+                if target_item is None:
+                    self._send_json({"error": f"Запись не найдена: {repo_id}::{filename}"}, status=404)
+                    return
+                if not target_item.get("s3_synced"):
+                    self._send_json({"error": "Модель не синхронизирована с S3 (s3_synced=false)"}, status=400)
+                    return
+
+                t = threading.Thread(
+                    target=_s3_download_worker,
+                    args=(self.config_path, repo_id, filename),
+                    daemon=True,
+                )
+                t.start()
+                self._send_json({"status": "started", "repo_id": repo_id, "filename": filename})
             except (ValueError, TypeError) as e:
                 self._send_json({"error": str(e)}, status=400)
             except Exception as e:
