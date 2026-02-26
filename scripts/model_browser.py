@@ -172,7 +172,6 @@ def s3_upload_model(
 
     try:
         import boto3
-        from botocore.config import Config as BotocoreConfig
         from boto3.s3.transfer import TransferConfig
 
         kwargs: dict = {
@@ -263,7 +262,6 @@ def s3_download_model(
 
     try:
         import boto3
-        from botocore.config import Config as BotocoreConfig
         from boto3.s3.transfer import TransferConfig
 
         kwargs: dict = {
@@ -1519,11 +1517,10 @@ function renderModelRow(m, i) {
   // S3 upload: shown when S3 is configured, file is downloaded locally, not yet in S3
   // S3 download: shown when S3 is configured and file is in S3 but not downloaded locally
   const s3OpRunning = m.s3_op_status === 'running';
-  const s3OpDone = m.s3_op_status === 'done';
 
   if (m.s3_config_available) {
-    // Upload to S3 button: visible when downloaded locally (may or may not be in S3 already)
-    if (m.downloaded) {
+    // Upload to S3 button: visible when downloaded locally and not an Ollama model
+    if (m.downloaded && !isOllama) {
       const btnS3Upload = document.createElement('button');
       btnS3Upload.className = 'btn-s3-upload';
       if (s3OpRunning && m.s3_op_type === 'upload') {
@@ -1531,7 +1528,7 @@ function renderModelRow(m, i) {
         btnS3Upload.disabled = true;
         btnS3Upload.title = 'Загрузка в S3...';
       } else {
-        btnS3Upload.textContent = m.s3_synced ? '↑S3' : '↑S3';
+        btnS3Upload.textContent = m.s3_synced ? '↻S3' : '↑S3';
         btnS3Upload.disabled = s3OpRunning;
         btnS3Upload.title = m.s3_synced
           ? 'Переотправить в S3 (уже синхронизировано)'
