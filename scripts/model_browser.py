@@ -185,15 +185,16 @@ def s3_upload_model(
         client = boto3.client("s3", **kwargs)
 
         # Idempotency check: compare sizes
+        from botocore.exceptions import ClientError as _BotoClientError
         file_size = local_file.stat().st_size
         try:
             resp = client.head_object(Bucket=s3_cfg.bucket, Key=key)
             remote_size = resp.get("ContentLength", -1)
             if remote_size == file_size:
                 return "SKIP", None, key
-        except Exception as head_exc:
-            err_str = str(head_exc)
-            if not any(x in err_str for x in ("404", "NoSuchKey", "Not Found")):
+        except _BotoClientError as head_exc:
+            code = head_exc.response.get("Error", {}).get("Code", "")
+            if code not in ("404", "NoSuchKey"):
                 return "ERROR", f"S3 head_object ошибка: {head_exc}", key
 
         transfer_cfg = TransferConfig(
@@ -350,18 +351,19 @@ def _set_s3_metadata(
     Returns True on success, False on write error.
     """
     try:
-        raw = load_yaml(config_path)
-        for item in raw.get("models", []) or []:
-            if not isinstance(item, dict):
-                continue
-            if item.get("repo_id") == repo_id and item.get("filename") == filename:
-                item["s3_synced"] = s3_synced
-                if s3_synced and s3_key:
-                    item["s3_key"] = s3_key
-                else:
-                    item.pop("s3_key", None)
-                break
-        _atomic_yaml_write(config_path, raw)
+        with _yaml_write_lock:
+            raw = load_yaml(config_path)
+            for item in raw.get("models", []) or []:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("repo_id") == repo_id and item.get("filename") == filename:
+                    item["s3_synced"] = s3_synced
+                    if s3_synced and s3_key:
+                        item["s3_key"] = s3_key
+                    else:
+                        item.pop("s3_key", None)
+                    break
+            _atomic_yaml_write(config_path, raw)
         return True
     except Exception as e:
         print(f"  [WARN] _set_s3_metadata: не удалось обновить yaml: {e}", file=sys.stderr)
@@ -392,6 +394,7 @@ class DownloadState(TypedDict):
 
 
 _dl_lock: threading.Lock = threading.Lock()
+_yaml_write_lock: threading.Lock = threading.Lock()  # protects load_yaml → _atomic_yaml_write TOCTOU
 download_state: DownloadState = {
     "running": False,
     "cancelled": False,
@@ -413,6 +416,22 @@ download_state: DownloadState = {
 #          "s3_key": str}
 _s3_op_lock: threading.Lock = threading.Lock()
 _s3_ops: dict = {}  # dict[(repo_id, filename), dict]
+_S3_OP_TTL: int = 120  # seconds before done/error entries are expired from _s3_ops
+
+
+def _get_s3_op_state(key_tuple: tuple) -> dict:
+    """Return current S3 op state for (repo_id, filename), evicting expired done/error entries."""
+    import time as _time
+    with _s3_op_lock:
+        state = _s3_ops.get(key_tuple)
+        if state is None:
+            return {}
+        if state.get("status") in ("done", "error"):
+            completed_at = state.get("completed_at", 0.0)
+            if _time.time() - completed_at > _S3_OP_TTL:
+                del _s3_ops[key_tuple]
+                return {}
+        return dict(state)
 
 
 def _s3_upload_worker(config_path: Path, repo_id: str, filename: str) -> None:
@@ -431,27 +450,29 @@ def _s3_upload_worker(config_path: Path, repo_id: str, filename: str) -> None:
     try:
         status, error, s3_key = s3_upload_model(config_path, repo_id, filename)
 
+        import time as _time
         if status == "UPLOADED":
             # Persist s3_synced=True + s3_key in yaml
             _set_s3_metadata(config_path, repo_id, filename, s3_synced=True, s3_key=s3_key)
             print(f"  [S3-OK] Upload complete: {repo_id}::{filename} → s3_key={s3_key}")
             with _s3_op_lock:
-                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key}
+                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key, "completed_at": _time.time()}
         elif status == "SKIP":
             print(f"  [S3-SKIP] Already in S3: {repo_id}::{filename}")
             # Still mark as synced (may not have been marked previously)
             if s3_key:
                 _set_s3_metadata(config_path, repo_id, filename, s3_synced=True, s3_key=s3_key)
             with _s3_op_lock:
-                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key}
+                _s3_ops[key_tuple] = {"status": "done", "operation": "upload", "error": None, "s3_key": s3_key, "completed_at": _time.time()}
         else:
             print(f"  [S3-ERR] Upload failed: {repo_id}::{filename} — {error}", file=sys.stderr)
             with _s3_op_lock:
-                _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": error or "Unknown error", "s3_key": ""}
+                _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": error or "Unknown error", "s3_key": "", "completed_at": _time.time()}
     except Exception as exc:
+        import time as _time
         print(f"  [S3-ERR] Upload worker exception: {exc}", file=sys.stderr)
         with _s3_op_lock:
-            _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": str(exc), "s3_key": ""}
+            _s3_ops[key_tuple] = {"status": "error", "operation": "upload", "error": str(exc), "s3_key": "", "completed_at": _time.time()}
 
 
 def _s3_download_worker(config_path: Path, repo_id: str, filename: str) -> None:
@@ -470,18 +491,20 @@ def _s3_download_worker(config_path: Path, repo_id: str, filename: str) -> None:
     try:
         status, error = s3_download_model(config_path, repo_id, filename)
 
+        import time as _time
         if status == "DOWNLOADED":
             print(f"  [S3-DL-OK] Download complete: {repo_id}::{filename}")
             with _s3_op_lock:
-                _s3_ops[key_tuple] = {"status": "done", "operation": "download", "error": None, "s3_key": ""}
+                _s3_ops[key_tuple] = {"status": "done", "operation": "download", "error": None, "s3_key": "", "completed_at": _time.time()}
         else:
             print(f"  [S3-DL-ERR] Download failed: {repo_id}::{filename} — {error}", file=sys.stderr)
             with _s3_op_lock:
-                _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": error or "Unknown error", "s3_key": ""}
+                _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": error or "Unknown error", "s3_key": "", "completed_at": _time.time()}
     except Exception as exc:
+        import time as _time
         print(f"  [S3-DL-ERR] Download worker exception: {exc}", file=sys.stderr)
         with _s3_op_lock:
-            _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": str(exc), "s3_key": ""}
+            _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": str(exc), "s3_key": "", "completed_at": _time.time()}
 
 
 def _check_stale_download_state() -> bool:
@@ -1973,7 +1996,9 @@ async function downloadFromS3(m) {
  */
 async function _pollS3Op(repoId, filename, opType) {
   const maxPolls = 3600;  // 2h max = 3600 polls × 2s
+  const maxNetworkErrors = 3;  // stop after 3 consecutive network failures
   let polls = 0;
+  let consecutiveErrors = 0;
   const interval = setInterval(async () => {
     polls++;
     if (polls > maxPolls) {
@@ -1984,6 +2009,7 @@ async function _pollS3Op(repoId, filename, opType) {
       const qs = `repo_id=${encodeURIComponent(repoId)}&filename=${encodeURIComponent(filename)}`;
       const resp = await fetch('/api/s3/status?' + qs);
       if (!resp.ok) { clearInterval(interval); return; }
+      consecutiveErrors = 0;  // reset on successful response
       const data = await resp.json();
       if (data.status === 'done' || data.status === 'error') {
         clearInterval(interval);
@@ -1994,7 +2020,11 @@ async function _pollS3Op(repoId, filename, opType) {
         }
       }
     } catch (e) {
-      clearInterval(interval);
+      consecutiveErrors++;
+      if (consecutiveErrors >= maxNetworkErrors) {
+        clearInterval(interval);
+        await loadModels();  // refresh UI to remove stale spinner
+      }
     }
   }, 2000);
 }
@@ -3133,9 +3163,8 @@ def get_models_json(config_path: Path) -> list[dict]:
         downloaded = local_file.is_file()
         disk_size_bytes = int(local_file.stat().st_size) if downloaded else 0
 
-        # Per-model S3 operation status from in-memory state
-        with _s3_op_lock:
-            op_state = _s3_ops.get((repo_id, filename), {})
+        # Per-model S3 operation status from in-memory state (TTL-aware)
+        op_state = _get_s3_op_state((repo_id, filename))
         s3_op_status = op_state.get("status", "idle")
         s3_op_type = op_state.get("operation")
         s3_op_error = op_state.get("error")
@@ -3997,8 +4026,7 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 self._send_json({"error": "repo_id и filename обязательны"}, status=400)
                 return
             key_tuple = (repo_id, filename)
-            with _s3_op_lock:
-                op = _s3_ops.get(key_tuple, {"status": "idle", "operation": None, "error": None, "s3_key": ""})
+            op = _get_s3_op_state(key_tuple) or {"status": "idle", "operation": None, "error": None, "s3_key": ""}
             self._send_json(op)
 
         else:
@@ -4186,13 +4214,13 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     raise ValueError("repo_id и filename обязательны")
                 if Path(filename).name != filename:
                     raise ValueError(f"Недопустимое имя файла: '{filename}'")
+                if not _REPO_ID_RE.match(repo_id):
+                    raise ValueError(f"Недопустимый repo_id: '{repo_id}'")
 
                 key_tuple = (repo_id, filename)
-                with _s3_op_lock:
-                    current_op = _s3_ops.get(key_tuple, {})
-                    if current_op.get("status") == "running":
-                        self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
-                        return
+                if _get_s3_op_state(key_tuple).get("status") == "running":
+                    self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
+                    return
 
                 # Check S3 config before starting
                 s3_cfg_check = _load_s3_config(self.config_path)
@@ -4223,13 +4251,13 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     raise ValueError("repo_id и filename обязательны")
                 if Path(filename).name != filename:
                     raise ValueError(f"Недопустимое имя файла: '{filename}'")
+                if not _REPO_ID_RE.match(repo_id):
+                    raise ValueError(f"Недопустимый repo_id: '{repo_id}'")
 
                 key_tuple = (repo_id, filename)
-                with _s3_op_lock:
-                    current_op = _s3_ops.get(key_tuple, {})
-                    if current_op.get("status") == "running":
-                        self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
-                        return
+                if _get_s3_op_state(key_tuple).get("status") == "running":
+                    self._send_json({"error": "Операция уже выполняется для этой модели"}, status=409)
+                    return
 
                 # Check S3 config + that model is in S3 before starting
                 s3_cfg_check = _load_s3_config(self.config_path)
