@@ -846,6 +846,11 @@ def register_with_ollama(
 
     if not local_file.is_file():
         raise FileNotFoundError(f"GGUF file not found: {local_file}")
+    if not _OLLAMA_TAG_RE.match(ollama_name):
+        raise ValueError(
+            f"Invalid Ollama model name: {ollama_name!r}. "
+            "Expected format: model, model:tag, or namespace/model:tag"
+        )
 
     modelfile_content = f"FROM {local_file.resolve()}\n"
     tmp = tempfile.NamedTemporaryFile(
