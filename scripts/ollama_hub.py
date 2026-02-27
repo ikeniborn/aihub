@@ -15,7 +15,7 @@ Public functions:
   search_models(query, limit)       → list[dict] with model_tag/description/pulls/params/quantization
   get_model_info(model_tag)         → dict with model_tag/digest/size
   download_model_gguf(model_tag, dest_path, progress_callback)  → Path
-  register_with_ollama(local_file, ollama_name, ollama_models_dir)  → None
+  register_with_ollama(local_file, ollama_name)  → None
 
 File naming:
   model_tag 'llama3.2:8b-instruct-q4_K_M'  → 'llama3.2-8b-instruct-q4_K_M.gguf'
@@ -811,89 +811,42 @@ def download_model_gguf(
     )
 
 
-# ─── Ollama registration (zero-copy) ──────────────────────────────────────────
+# ─── Ollama registration ──────────────────────────────────────────────────────
 
 
 def register_with_ollama(
     local_file: Path,
     ollama_name: str,
-    ollama_models_dir: Optional[Path] = None,
 ) -> None:
-    """Register a locally downloaded GGUF with Ollama without data duplication.
+    """Register a locally downloaded GGUF with the local Ollama daemon.
 
-    Algorithm:
-      1. Read SHA256 digest from the .etag sidecar (format: ``sha256:hexhash``).
-      2. Pre-create a hardlink at ``$OLLAMA_MODELS/blobs/sha256-{hash}`` pointing
-         to *local_file*.  On cross-device filesystems falls back to a symlink.
-         If neither succeeds, a warning is printed and step 3 continues — Ollama
-         will copy the file in that case (standard behavior, no data loss).
-      3. Run ``ollama create {ollama_name} -f <Modelfile>`` where the Modelfile
-         contains a single ``FROM {local_file}`` directive.
-         Because the blob already exists at the expected path, Ollama only writes
-         the manifest and skips copying — achieving zero storage duplication.
+    Writes a temporary Modelfile containing ``FROM {local_file}`` and runs
+    ``ollama create {ollama_name} -f <Modelfile>``.
+
+    Ollama computes the SHA256 of the file:
+    - If the blob already exists in ``$OLLAMA_MODELS/blobs/`` → links it (no copy).
+    - Otherwise → copies the GGUF into the blobs directory.
+
+    After registration the local aihub copy can be deleted — the model will
+    continue to function via Ollama's own blob store.
 
     Requirements:
       - ``ollama`` must be installed and available on PATH.
-      - Hardlink only avoids duplication when *local_file* and ``$OLLAMA_MODELS``
-        reside on the same filesystem/device.
 
     Args:
-      local_file:        Path to the downloaded GGUF file.
-      ollama_name:       Ollama model name (e.g. ``'qwen3:7b'``, ``'llama3.2'``).
-      ollama_models_dir: Override for ``$OLLAMA_MODELS`` directory.
-                         Defaults to the env var, then ``~/.ollama``.
+      local_file:   Path to the downloaded GGUF file (must exist).
+      ollama_name:  Ollama model name/tag (e.g. ``'qwen3:7b'``, ``'llama3.2'``).
 
     Raises:
-      FileNotFoundError:          if *local_file* does not exist.
+      FileNotFoundError:             if *local_file* does not exist.
       subprocess.CalledProcessError: if ``ollama create`` exits non-zero.
     """
-    import os as _os
     import subprocess
     import tempfile
 
     if not local_file.is_file():
         raise FileNotFoundError(f"GGUF file not found: {local_file}")
 
-    # Resolve $OLLAMA_MODELS directory
-    if ollama_models_dir is None:
-        env_val = _os.environ.get("OLLAMA_MODELS")
-        ollama_models_dir = Path(env_val) if env_val else Path.home() / ".ollama"
-
-    # Step 1: read SHA256 from .etag sidecar written during download
-    digest = _read_local_digest(local_file)  # "sha256:hexhash" or None
-
-    # Step 2: pre-create hardlink (or symlink) in blobs/ so Ollama skips the copy
-    if digest and digest.startswith("sha256:"):
-        hex_hash = digest[len("sha256:"):]
-        blobs_dir = ollama_models_dir / "blobs"
-        blobs_dir.mkdir(parents=True, exist_ok=True)
-        blob_path = blobs_dir / f"sha256-{hex_hash}"
-
-        if blob_path.exists():
-            print(f"  [OLLAMA] Blob already present: {blob_path.name}")
-        else:
-            try:
-                _os.link(local_file, blob_path)
-                print(f"  [OLLAMA] Hardlink created: {blob_path.name}")
-            except OSError:
-                # Cross-device — fall back to absolute symlink
-                try:
-                    blob_path.symlink_to(local_file.resolve())
-                    print(
-                        f"  [OLLAMA] Symlink created: {blob_path.name} → {local_file}"
-                    )
-                except OSError as sym_err:
-                    print(
-                        f"  [OLLAMA] Warning: could not pre-create blob ({sym_err}); "
-                        "ollama create will copy the file"
-                    )
-    else:
-        print(
-            "  [OLLAMA] Warning: no .etag digest found — "
-            "skipping blob pre-creation; ollama create will copy the file"
-        )
-
-    # Step 3: create Modelfile and run `ollama create`
     modelfile_content = f"FROM {local_file.resolve()}\n"
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=".Modelfile", delete=False, encoding="utf-8"

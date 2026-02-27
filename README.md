@@ -104,19 +104,18 @@ make ui PORT=8080 HOST=0.0.0.0
 
 ## Использование скачанных Ollama-моделей
 
-aihub скачивает GGUF из OCI-реестра в `models/`. Чтобы использовать их в `ollama run`
-без дублирования данных, применяйте флаг `--register-ollama`:
+aihub скачивает GGUF из OCI-реестра в `models/`. Чтобы использовать их в `ollama run`,
+зарегистрируйте модели через веб-интерфейс или CLI:
 
 ```bash
-# Скачать и сразу зарегистрировать в Ollama (hardlink — без копирования)
-python scripts/download_models.py --register-ollama
+# Через UI: кнопка →Ollama в строке модели (вкладка «Мои модели»)
+make ui
 
-# Только зарегистрировать уже скачанные модели
-python scripts/download_models.py --register-ollama   # SKIP + регистрация
+# Через CLI: скачать и зарегистрировать в Ollama
+python scripts/download_models.py --register-ollama
 ```
 
-Флаг создаёт hardlink от GGUF в `$OLLAMA_MODELS/blobs/sha256-{hash}`.
-`ollama create` находит существующий блоб — данные **не копируются**.
+После регистрации локальный GGUF в `models/` можно удалить (кнопка **✕ → Только локально**).
 
 Подробнее — см. [docs/GUIDES.md §11](docs/GUIDES.md#11-использование-скачанных-ollama-моделей).
 
@@ -140,8 +139,7 @@ make download
 --include-disabled      включить отключённые модели
 --upload-s3             загрузить в S3 после скачивания
 --s3-only               только S3 (без постоянного хранения на диске)
---register-ollama       зарегистрировать Ollama-модели без дублирования данных (hardlink)
---ollama-models-dir DIR путь к $OLLAMA_MODELS (по умолчанию: ~/.ollama)
+--register-ollama       зарегистрировать Ollama-модели в Ollama после скачивания
 --retries N             количество повторов (default: 3)
 --retry-delay SECS      базовая задержка между повторами (default: 5s)
 --delay SECS            пауза между моделями (default: 0)

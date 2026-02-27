@@ -777,6 +777,13 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .btn-s3-download:hover:not(:disabled) { opacity: 1; background: #082044; }
   .btn-s3-download:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-ollama-reg {
+    background: none; border: 1px solid #6d28d9; border-radius: 4px;
+    color: #c4b5fd; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-ollama-reg:hover:not(:disabled) { opacity: 1; background: #2e1065; }
+  .btn-ollama-reg:disabled { opacity: 0.3; cursor: not-allowed; }
   .s3-op-spinner {
     display: inline-block; width: 10px; height: 10px;
     border: 2px solid rgba(255,255,255,0.2); border-top-color: #38bdf8;
@@ -1670,6 +1677,21 @@ function renderModelRow(m, i) {
     }
   }
 
+  // ── Ollama registration button ──────────────────────────────────────────────
+  if (isOllama && (m.downloaded || m.s3_available)) {
+    const btnOllama = document.createElement('button');
+    btnOllama.className = 'btn-ollama-reg';
+    if (m.downloaded) {
+      btnOllama.textContent = '→Ollama';
+      btnOllama.title = 'Зарегистрировать модель в Ollama (`ollama create FROM`)';
+    } else {
+      btnOllama.textContent = '↓→Ollama';
+      btnOllama.title = 'Скачать из S3 локально, затем зарегистрировать в Ollama';
+    }
+    btnOllama.onclick = () => registerWithOllama(m, btnOllama);
+    tdActions.append(' ', btnOllama);
+  }
+
   tdActions.append(btnEdit, ' ', btnDel);
 
   tr.append(tdCb, tdStatus, tdName, tdTags, tdSize, tdDesc, tdActions);
@@ -2067,6 +2089,92 @@ async function downloadFromS3(m) {
     _pollS3Op(m.repo_id, m.filename, 'download');
   } catch (e) {
     alert('Ошибка: ' + e.message);
+  }
+}
+
+/**
+ * Register a locally downloaded Ollama GGUF with the local Ollama daemon.
+ * Calls POST /api/ollama/register which runs `ollama create FROM <path>` server-side.
+ * If the model is only in S3 (not downloaded locally), first triggers S3 download,
+ * waits for it to complete, then registers.
+ */
+async function registerWithOllama(m, btn) {
+  const label = `${m.ollama_model || m.filename} (${m.repo_id})`;
+  const needsS3 = !m.downloaded && m.s3_available;
+  const confirmMsg = needsS3
+    ? `Модель не скачана локально.\n\nСначала будет выполнено скачивание из S3,\nзатем регистрация в Ollama.\n\n${label}`
+    : `Зарегистрировать модель в Ollama?\n\n${label}`;
+  if (!confirm(confirmMsg)) return;
+
+  const origText = btn.textContent;
+  btn.disabled = true;
+
+  const _restoreBtn = () => {
+    btn.textContent = origText;
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    btn.style.opacity = '';
+    btn.disabled = false;
+  };
+
+  try {
+    // ── Step 1 (S3-only): download to local storage first ──────────────────
+    if (needsS3) {
+      btn.textContent = '↓S3…';
+      const s3Resp = await fetch('/api/s3/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+      });
+      const s3Data = await s3Resp.json();
+      if (!s3Resp.ok) {
+        throw new Error('Ошибка запуска скачивания из S3: ' + (s3Data.error || 'HTTP ' + s3Resp.status));
+      }
+
+      // Poll S3 download status until done
+      btn.textContent = '↓…';
+      await new Promise((resolve, reject) => {
+        let polls = 0;
+        const iv = setInterval(async () => {
+          polls++;
+          if (polls > 1800) { clearInterval(iv); reject(new Error('Таймаут ожидания S3')); return; }
+          try {
+            const qs = `repo_id=${encodeURIComponent(m.repo_id)}&filename=${encodeURIComponent(m.filename)}`;
+            const sr = await fetch('/api/s3/status?' + qs);
+            if (!sr.ok) { clearInterval(iv); reject(new Error('Ошибка статуса S3')); return; }
+            const sd = await sr.json();
+            if (sd.status === 'done') { clearInterval(iv); resolve(); }
+            else if (sd.status === 'error') { clearInterval(iv); reject(new Error(sd.error || 'Ошибка S3')); }
+          } catch (e) { clearInterval(iv); reject(e); }
+        }, 2000);
+      });
+
+      // Refresh model list so the updated local_path is available
+      await loadModels();
+    }
+
+    // ── Step 2: register with Ollama ───────────────────────────────────────
+    btn.textContent = '→O…';
+    const regResp = await fetch('/api/ollama/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+    });
+    const regData = await regResp.json();
+    if (!regResp.ok) {
+      throw new Error('Ошибка регистрации в Ollama: ' + (regData.error || 'HTTP ' + regResp.status));
+    }
+
+    // ── Show temporary success state ───────────────────────────────────────
+    btn.textContent = '✓';
+    btn.style.color = 'var(--green)';
+    btn.style.borderColor = 'var(--green)';
+    btn.style.opacity = '1';
+    setTimeout(_restoreBtn, 2500);
+
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+    _restoreBtn();
   }
 }
 
@@ -4729,6 +4837,61 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 )
                 t.start()
                 self._send_json({"status": "started", "repo_id": repo_id, "filename": filename})
+            except (ValueError, TypeError) as e:
+                self._send_json({"error": str(e)}, status=400)
+            except Exception as e:
+                self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/ollama/register":
+            # Register a downloaded Ollama GGUF with the local Ollama daemon.
+            # Creates a hardlink in $OLLAMA_MODELS/blobs/sha256-{hash} so that
+            # `ollama create` finds the blob and skips copying — zero data duplication.
+            try:
+                repo_id = str(payload.get("repo_id", "")).strip()
+                filename = str(payload.get("filename", "")).strip()
+                if not repo_id or not filename:
+                    raise ValueError("repo_id и filename обязательны")
+                if Path(filename).name != filename:
+                    raise ValueError(f"Недопустимое имя файла: '{filename}'")
+                if not repo_id.startswith("ollama/"):
+                    raise ValueError(f"Только Ollama-модели поддерживаются (ожидается repo_id вида 'ollama/...'): '{repo_id}'")
+                if not _OLLAMA_AVAILABLE:
+                    raise RuntimeError("ollama_hub недоступен — проверьте установку зависимостей")
+
+                # Locate model entry to get dest_dir and ollama_model
+                raw = load_yaml(self.config_path)
+                settings = raw.get("settings", {}) or {}
+                models_dir = Path(settings.get("models_dir", "./models"))
+                if not models_dir.is_absolute():
+                    models_dir = self.config_path.parent / models_dir
+
+                target_item = None
+                for item in raw.get("models", []) or []:
+                    if (isinstance(item, dict)
+                            and item.get("repo_id") == repo_id
+                            and item.get("filename") == filename):
+                        target_item = item
+                        break
+                if target_item is None:
+                    self._send_json({"error": f"Запись не найдена: {repo_id}::{filename}"}, status=404)
+                    return
+                if target_item.get("source") != "ollama":
+                    self._send_json({"error": "Поддерживаются только Ollama-модели"}, status=400)
+                    return
+
+                ollama_model = target_item.get("ollama_model")
+                if not ollama_model:
+                    self._send_json({"error": "Поле 'ollama_model' отсутствует в записи"}, status=400)
+                    return
+
+                dest_dir = target_item.get("dest_dir", "misc") or "misc"
+                local_file = models_dir / dest_dir / filename
+                if not local_file.is_file():
+                    self._send_json({"error": f"Файл не найден на диске: {local_file}"}, status=404)
+                    return
+
+                _ollama_hub.register_with_ollama(local_file, ollama_model)
+                self._send_json({"status": "ok", "ollama_model": ollama_model})
             except (ValueError, TypeError) as e:
                 self._send_json({"error": str(e)}, status=400)
             except Exception as e:
