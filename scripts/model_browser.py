@@ -3103,6 +3103,10 @@ function applyOllamaVariantFilter() {
   const inputChip = document.querySelector('#ollama-input-chips .filter-chip.active');
   const inputFilter = inputChip ? (inputChip.dataset.input || '') : '';
 
+  // Capability (caps) filter state — read once for all rows
+  const activeCaps = [...document.querySelectorAll('#ollama-caps-chips .filter-chip[data-cap].active')]
+    .map(c => c.dataset.cap);
+
   const tbody = document.getElementById('hf-results-body');
   if (!tbody) return;
 
@@ -3139,6 +3143,12 @@ function applyOllamaVariantFilter() {
     // Input type filter
     if (show && inputFilter) {
       show = (tr.dataset.inputType || '') === inputFilter;
+    }
+
+    // Capability filter — keep in sync with applyOllamaCapsFilter state
+    if (show && activeCaps.length > 0) {
+      const rowCaps = JSON.parse(tr.dataset.caps || '[]');
+      if (!activeCaps.some(ac => rowCaps.includes(ac))) show = false;
     }
 
     tr.style.display = show ? '' : 'none';
