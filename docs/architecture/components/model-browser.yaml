@@ -132,7 +132,7 @@ dependencies:
 cli_interface:
   program: model_browser.py
   options:
-    - "--port PORT  : HTTP port (default: 9000)"
+    - "--port PORT  : HTTP port (default: 9009)"
     - "--host HOST  : bind address (default: 127.0.0.1)"
     - "--config FILE: path to models.yaml (default: models.yaml)"
     - "--open       : open browser automatically after start"
@@ -148,11 +148,11 @@ security:
   - "Atomic writes prevent config corruption on power loss"
 
 makefile_targets:
-  - "make ui          : opens http://localhost:9000, auto-opens browser"
+  - "make ui          : opens http://localhost:9009, auto-opens browser"
   - "make ui PORT=X   : custom port"
   - "make ui HOST=0.0.0.0 : expose to network"
 
 usage_examples:
   - "python scripts/model_browser.py"
   - "python scripts/model_browser.py --port 8080 --open"
-  - "python scripts/model_browser.py --host 0.0.0.0 --port 9000"
+  - "python scripts/model_browser.py --host 0.0.0.0 --port 9009"

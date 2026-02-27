@@ -159,7 +159,7 @@ components:
     external_deps:
       - PyYAML
     web_server:
-      default_port: 9000
+      default_port: 9009
       default_host: "127.0.0.1"
       stdlib_only: true
 

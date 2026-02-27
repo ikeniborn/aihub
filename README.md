@@ -21,7 +21,7 @@ make setup                                      # создать .venv и уст
 cp credentials.yaml.example credentials.yaml   # добавить токены
 cp .env.example .env                            # добавить S3-параметры
 cp models.yaml.example models.yaml             # создать список моделей
-make ui                                         # открыть веб-интерфейс → http://localhost:9000
+make ui                                         # открыть веб-интерфейс → http://localhost:9009
 make download                                   # загрузка всех включённых моделей
 ```
 
@@ -64,7 +64,7 @@ S3_ENDPOINT_URL=               # пусто для AWS; для Yandex/MinIO — 
 ## Веб-интерфейс (`model_browser.py`)
 
 ```bash
-python scripts/model_browser.py                         # http://localhost:9000
+python scripts/model_browser.py                         # http://localhost:9009
 python scripts/model_browser.py --port 8080 --host 0.0.0.0
 make ui                                                 # с автооткрытием браузера
 make ui PORT=8080 HOST=0.0.0.0
@@ -230,7 +230,7 @@ aihub/
 ├── scripts/
 │   ├── utils.py                 # общие утилиты (fmt_size, ProxyConfig)
 │   ├── download_models.py       # загрузка моделей → локально / S3
-│   ├── model_browser.py         # веб-интерфейс (порт 9000)
+│   ├── model_browser.py         # веб-интерфейс (порт 9009)
 │   └── ollama_hub.py            # Ollama OCI client: поиск, теги, загрузка GGUF
 ├── docs/
 │   └── GUIDES.md                # пошаговое руководство пользователя

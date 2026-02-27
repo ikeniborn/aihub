@@ -9,10 +9,10 @@ HTTP-сервер для просмотра и управления AI-моде�
 
 Запуск:
     python scripts/model_browser.py
-    python scripts/model_browser.py --port 9000
-    python scripts/model_browser.py --config models.yaml --port 9000 --open
+    python scripts/model_browser.py --port 9009
+    python scripts/model_browser.py --config models.yaml --port 9009 --open
 
-Открыть в браузере: http://localhost:9000
+Открыть в браузере: http://localhost:9009
 
 API:
     GET  /api/settings            — текущие settings из models.yaml (concurrency, bandwidth, timeout)
@@ -5178,8 +5178,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--port", "-p",
-        type=int, default=9000, metavar="PORT",
-        help="Порт HTTP-сервера (по умолчанию: 9000)",
+        type=int, default=9009, metavar="PORT",
+        help="Порт HTTP-сервера (по умолчанию: 9009)",
     )
     p.add_argument(
         "--host",
