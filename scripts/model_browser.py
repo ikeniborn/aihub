@@ -1681,14 +1681,21 @@ function renderModelRow(m, i) {
   if (isOllama && (m.downloaded || m.s3_available)) {
     const btnOllama = document.createElement('button');
     btnOllama.className = 'btn-ollama-reg';
-    if (m.downloaded) {
+    const isRegistered = m.ollama_model && ollamaLoaded.has(m.ollama_model);
+    if (isRegistered) {
+      btnOllama.textContent = '✓Ollama';
+      btnOllama.title = 'Модель уже зарегистрирована в Ollama';
+      btnOllama.style.opacity = '0.5';
+      btnOllama.style.cursor = 'default';
+      btnOllama.disabled = true;
+    } else if (m.downloaded) {
       btnOllama.textContent = '→Ollama';
       btnOllama.title = 'Зарегистрировать модель в Ollama (`ollama create FROM`)';
     } else {
       btnOllama.textContent = '↓→Ollama';
       btnOllama.title = 'Скачать из S3 локально, затем зарегистрировать в Ollama';
     }
-    btnOllama.onclick = () => registerWithOllama(m, btnOllama);
+    if (!isRegistered) btnOllama.onclick = () => registerWithOllama(m, btnOllama);
     tdActions.append(' ', btnOllama);
   }
 
@@ -2165,12 +2172,14 @@ async function registerWithOllama(m, btn) {
       throw new Error('Ошибка регистрации в Ollama: ' + (regData.error || 'HTTP ' + regResp.status));
     }
 
-    // ── Show temporary success state ───────────────────────────────────────
+    // ── Show temporary success state, then update ollamaLoaded and re-render ─
     btn.textContent = '✓';
     btn.style.color = 'var(--green)';
     btn.style.borderColor = 'var(--green)';
     btn.style.opacity = '1';
     setTimeout(_restoreBtn, 2500);
+    if (m.ollama_model) ollamaLoaded.add(m.ollama_model);
+    await loadModels();
 
   } catch (e) {
     alert('Ошибка: ' + e.message);
@@ -2322,6 +2331,7 @@ function toggleLangChip(chip) {
 
 let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
+let ollamaLoaded = new Set(); // ollama_model names already registered in Ollama daemon
 
 function onSourceChange() {
   const source = document.getElementById('hf-source').value;
@@ -3555,6 +3565,7 @@ async function dlCancel() {
 // Init
 loadModels();
 loadSettings();
+loadOllamaState();
 checkRunningDownload();
 
 // Resume download panel if a download is already running (e.g. after page refresh).
@@ -3572,6 +3583,34 @@ async function checkRunningDownload() {
   } catch (_) {}
 }
 
+async function loadOllamaState() {
+  const statusEl = document.getElementById('ol-status');
+  try {
+    const resp = await fetch('/api/ollama/loaded');
+    const data = await resp.json();
+    ollamaLoaded = new Set(data.models || []);
+    if (statusEl) {
+      if (data.ok) {
+        statusEl.textContent = ollamaLoaded.size > 0
+          ? `● ${ollamaLoaded.size} мод.`
+          : '● пусто';
+        statusEl.style.color = 'var(--green, #4ade80)';
+      } else {
+        statusEl.textContent = '✕ недоступен';
+        statusEl.style.color = 'var(--red, #f87171)';
+      }
+    }
+    // Re-render model list if already loaded
+    if (allModels.length > 0) renderModels();
+  } catch (_) {
+    ollamaLoaded = new Set();
+    if (statusEl) {
+      statusEl.textContent = '✕ недоступен';
+      statusEl.style.color = 'var(--red, #f87171)';
+    }
+  }
+}
+
 async function loadSettings() {
   try {
     const resp = await fetch('/api/settings');
@@ -3585,6 +3624,10 @@ async function loadSettings() {
       document.getElementById('dl-bandwidth').value = s.bandwidth_limit_mbps;
     if (s.sync_after_download != null)
       document.getElementById('dl-sync-s3').checked = s.sync_after_download;
+    if (s.ollama_host) {
+      const olHostEl = document.getElementById('ol-host');
+      if (olHostEl) olHostEl.value = s.ollama_host;
+    }
   } catch (_) {}
 }
 
@@ -3598,11 +3641,15 @@ async function saveSettings() {
   const syncS3  = document.getElementById('dl-sync-s3').checked;
 
   // null means "remove from yaml" (no limit); 0 for timeout means disabled
+  const olHostEl = document.getElementById('ol-host');
+  const olHostVal = olHostEl ? olHostEl.value.trim() : '';
+
   const body = {
     hf_download_concurrency: (concRaw > 0)                    ? concRaw : null,
     download_timeout_hours:  (!isNaN(toRaw) && toRaw >= 0)    ? toRaw   : null,
     bandwidth_limit_mbps:    (!isNaN(bwRaw) && bwRaw > 0)     ? bwRaw   : null,
     sync_after_download:     syncS3,
+    ollama_host:             olHostVal || null,
   };
 
   try {
@@ -4690,6 +4737,18 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 if "sync_after_download" in params:
                     s3_sec = s.setdefault("s3", {})
                     s3_sec["sync_after_download"] = bool(params["sync_after_download"])
+                # ollama_host: string — сохраняется в settings.ollama.host
+                if "ollama_host" in params:
+                    v = str(params["ollama_host"]).strip()
+                    if v:
+                        s.setdefault("ollama", {})["host"] = v
+                    else:
+                        ollama_sec = s.get("ollama") or {}
+                        ollama_sec.pop("host", None)
+                        if not ollama_sec:
+                            s.pop("ollama", None)
+                        else:
+                            s["ollama"] = ollama_sec
                 _atomic_yaml_write(self.config_path, raw)
                 self._send_json({"status": "ok"})
             except (ValueError, TypeError) as e:
