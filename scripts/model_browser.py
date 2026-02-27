@@ -887,24 +887,55 @@ HTML_PAGE = r"""<!DOCTYPE html>
   .filter-chip:hover  { border-color: var(--accent); color: var(--accent); }
   .filter-chip.active { border-color: var(--accent); color: var(--accent);
                         background: #2d1f6e; }
-  /* Ollama variant picker in search results */
-  .ollama-variant-btn {
-    margin-top: 5px; padding: 2px 8px; font-size: 0.7rem;
+  .filter-chip.chip-clear { color: var(--text-muted); border-style: dashed; }
+  .filter-chip.chip-clear:hover { border-color: var(--red, #e55); color: var(--red, #e55); border-style: solid; }
+  /* Context window badge on model header */
+  .variant-ctx-badge {
+    display: inline-block; font-size: 0.65rem; color: var(--accent);
+    background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3);
+    border-radius: 3px; padding: 0 5px; margin-left: 6px; cursor: default;
+    vertical-align: middle;
+  }
+  /* Ollama variant expand/collapse button */
+  .ollama-expand-btn {
+    padding: 2px 8px; font-size: 0.72rem;
     background: none; border: 1px dashed var(--border); border-radius: 4px;
-    color: var(--text-muted); cursor: pointer; display: inline-block;
+    color: var(--text-muted); cursor: pointer; display: inline-flex; align-items: center; gap: 4px;
     transition: all 0.13s;
   }
-  .ollama-variant-btn:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+  .ollama-expand-btn:hover { border-color: var(--accent); color: var(--accent); border-style: solid; }
+  .ollama-expand-btn.expanded { border-style: solid; border-color: var(--accent); color: var(--accent); }
+  /* Ollama model group header row */
+  .ollama-model-header td { background: rgba(99,102,241,0.04); border-bottom: 1px solid var(--border); }
+  .ollama-model-header .cell-hf-repo { font-weight: 500; }
+  /* Ollama variant sub-rows */
+  .ollama-variant-row td { background: var(--bg-base); padding: 6px 10px; }
+  .ollama-variant-row td:first-child { padding-left: 10px; }
+  .ollama-col-size  { font-size: 0.78rem; color: var(--text-secondary); white-space: nowrap; }
+  .ollama-col-ctx   { font-size: 0.78rem; color: var(--accent); white-space: nowrap; font-family: monospace; }
+  .ollama-col-input { font-size: 0.72rem; color: var(--text-muted); white-space: nowrap; }
+  .ollama-loading-row td { color: var(--text-muted); font-style: italic; font-size: 0.78rem; }
+  .ollama-variant-row:hover td { background: rgba(99,102,241,0.06); }
+  .ollama-variant-row:last-of-type td { border-bottom: 2px solid var(--border); }
+  .variant-tag-label {
+    font-size: 0.8rem; font-weight: 500; color: var(--text-primary);
+    font-family: monospace;
+  }
+  .variant-size-label {
+    font-size: 0.72rem; color: var(--text-muted); margin-left: 8px;
+  }
+  /* Variant filter input */
+  #ollama-variant-filter {
+    padding: 5px 10px; font-size: 0.78rem; border-radius: 5px;
+    background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-primary);
+    outline: none; min-width: 200px; transition: border-color 0.15s;
+  }
+  #ollama-variant-filter:focus { border-color: var(--accent); }
+  #ollama-variant-filter::placeholder { color: var(--text-muted); }
   .file-size-tag {
     font-size: 0.62rem; color: var(--text-muted); background: rgba(255,255,255,0.06);
     border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
     vertical-align: middle; margin-left: 4px; cursor: default;
-  }
-  .ollama-tag-select {
-    margin-top: 5px; padding: 3px 6px; font-size: 0.72rem; display: block;
-    background: var(--bg-elevated); border: 1px solid var(--accent);
-    border-radius: 4px; color: var(--text-primary); cursor: pointer;
-    max-width: 220px; outline: none;
   }
   .hf-field select {
     background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px;
@@ -1254,11 +1285,77 @@ HTML_PAGE = r"""<!DOCTYPE html>
           </div>
         </div>
       </div>
-      <!-- Ollama capability filter — показывается динамически ПОСЛЕ поиска -->
+      <!-- Строка 3: Ollama пред-поиска — квантизация и размер (видна при source=ollama) -->
+      <div id="ollama-prefilter-row" class="hf-filters-row" style="display:none">
+        <div class="hf-filter-group">
+          <label>Тег / квантизация</label>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input type="text" id="ollama-variant-filter" placeholder="7b, q4_K_M, instruct…"
+                   oninput="applyOllamaVariantFilter()" style="width:170px">
+            <div class="filter-chips" id="ollama-variant-preset-chips" style="gap:4px;flex-wrap:wrap">
+              <span class="filter-chip" data-preset="q2_k"    onclick="setOllamaVariantPreset(this)" title="Q2_K — минимальный размер, низкое качество">Q2_K</span>
+              <span class="filter-chip" data-preset="q3_k_s"  onclick="setOllamaVariantPreset(this)">Q3_K_S</span>
+              <span class="filter-chip" data-preset="q3_k_m"  onclick="setOllamaVariantPreset(this)">Q3_K_M</span>
+              <span class="filter-chip" data-preset="q3_k_l"  onclick="setOllamaVariantPreset(this)">Q3_K_L</span>
+              <span class="filter-chip" data-preset="q4_0"    onclick="setOllamaVariantPreset(this)">Q4_0</span>
+              <span class="filter-chip" data-preset="q4_k_s"  onclick="setOllamaVariantPreset(this)">Q4_K_S</span>
+              <span class="filter-chip" data-preset="q4_k_m"  onclick="setOllamaVariantPreset(this)">Q4_K_M</span>
+              <span class="filter-chip" data-preset="q5_k_s"  onclick="setOllamaVariantPreset(this)">Q5_K_S</span>
+              <span class="filter-chip" data-preset="q5_k_m"  onclick="setOllamaVariantPreset(this)">Q5_K_M</span>
+              <span class="filter-chip" data-preset="q6_k"    onclick="setOllamaVariantPreset(this)">Q6_K</span>
+              <span class="filter-chip" data-preset="q8_0"    onclick="setOllamaVariantPreset(this)">Q8_0</span>
+              <span class="filter-chip" data-preset="fp16"    onclick="setOllamaVariantPreset(this)">FP16</span>
+              <span class="filter-chip" data-preset="bf16"    onclick="setOllamaVariantPreset(this)">BF16</span>
+              <span class="filter-chip" data-preset="iq4_xs"  onclick="setOllamaVariantPreset(this)">IQ4_XS</span>
+              <span class="filter-chip" data-preset="iq4_nl"  onclick="setOllamaVariantPreset(this)">IQ4_NL</span>
+              <span class="filter-chip" data-preset="instruct" onclick="setOllamaVariantPreset(this)">instruct</span>
+              <span class="filter-chip" data-preset="base"    onclick="setOllamaVariantPreset(this)">base</span>
+              <span class="filter-chip chip-clear" onclick="clearOllamaVariantFilter()" title="Сбросить фильтр">✕</span>
+            </div>
+          </div>
+        </div>
+        <div class="hf-filter-group">
+          <label>Размер, ГБ</label>
+          <div class="size-range">
+            <input type="number" id="ollama-min-gb" placeholder="от" min="0" step="0.5"
+                   oninput="applyOllamaVariantFilter()" style="width:72px">
+            <span>–</span>
+            <input type="number" id="ollama-max-gb" placeholder="до" min="0" step="0.5"
+                   oninput="applyOllamaVariantFilter()" style="width:72px">
+            <span style="font-size:0.72rem;color:var(--text-muted)">ГБ</span>
+          </div>
+        </div>
+        <div class="hf-filter-group">
+          <label>Контекст (мин)</label>
+          <div class="filter-chips" id="ollama-ctx-chips" style="gap:4px">
+            <span class="filter-chip active" data-ctx-min="0"   onclick="setOllamaCtxFilter(this)">Любой</span>
+            <span class="filter-chip" data-ctx-min="8"          onclick="setOllamaCtxFilter(this)">8K+</span>
+            <span class="filter-chip" data-ctx-min="16"         onclick="setOllamaCtxFilter(this)">16K+</span>
+            <span class="filter-chip" data-ctx-min="32"         onclick="setOllamaCtxFilter(this)">32K+</span>
+            <span class="filter-chip" data-ctx-min="64"         onclick="setOllamaCtxFilter(this)">64K+</span>
+            <span class="filter-chip" data-ctx-min="128"        onclick="setOllamaCtxFilter(this)">128K+</span>
+            <span class="filter-chip" data-ctx-min="200"        onclick="setOllamaCtxFilter(this)">200K+</span>
+          </div>
+        </div>
+        <div class="hf-filter-group">
+          <label>Input</label>
+          <div class="filter-chips" id="ollama-input-chips" style="gap:4px">
+            <span class="filter-chip active" data-input=""         onclick="setOllamaInputFilter(this)">Все</span>
+            <span class="filter-chip" data-input="text"           onclick="setOllamaInputFilter(this)">text</span>
+            <span class="filter-chip" data-input="text+img"       onclick="setOllamaInputFilter(this)">text+img</span>
+            <span class="filter-chip" data-input="text+audio"     onclick="setOllamaInputFilter(this)">text+audio</span>
+          </div>
+        </div>
+      </div>
+      <!-- Строка 4: Возможности + теги вариантов — показывается после поиска Ollama -->
       <div id="ollama-caps-row" class="hf-filters-row" style="display:none">
         <div class="hf-filter-group">
-          <label>Фильтр результатов <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">по возможностям</span></label>
+          <label>Возможности <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">модели</span></label>
           <div class="filter-chips" id="ollama-caps-chips"></div>
+        </div>
+        <div class="hf-filter-group" id="ollama-vtag-group" style="display:none">
+          <label>Теги вариантов <span style="font-size:0.65rem;color:var(--text-muted);margin-left:4px">из загруженных</span></label>
+          <div class="filter-chips" id="ollama-vtag-chips"></div>
         </div>
       </div>
     </div>
@@ -2138,10 +2235,13 @@ function onSourceChange() {
   if (authorField) authorField.style.display = isOllama ? 'none' : '';
   const pipelineField = document.getElementById('hf-pipeline-tag');
   if (pipelineField) pipelineField.closest('.hf-field').style.display = isOllama ? 'none' : '';
-  // HF-only filters row (regex, language, size)
-  const hfFiltersRow = document.querySelector('.hf-filters-row:not(#ollama-caps-row)');
+  // HF-only filters row (regex, language, size) — identified by not having an ID
+  const hfFiltersRow = document.querySelector('.hf-filters-row:not([id])');
   if (hfFiltersRow) hfFiltersRow.style.display = isOllama ? 'none' : '';
-  // Post-search result filter — hide until search completes
+  // Ollama prefilter row (quant/size) — visible when source=ollama, before search
+  const ollamaPrefilter = document.getElementById('ollama-prefilter-row');
+  if (ollamaPrefilter) ollamaPrefilter.style.display = isOllama ? '' : 'none';
+  // Post-search filter row — hide until search completes
   const capsRow = document.getElementById('ollama-caps-row');
   if (capsRow) capsRow.style.display = 'none';
 }
@@ -2229,128 +2329,270 @@ function renderHfResults(results) {
   document.getElementById('hf-results-count').textContent = '';
 
   results.forEach(r => {
-    // files is now [{name, size_bytes}, ...] or [] → normalise to [{name, size_bytes}] or [null]
-    const rawFiles = r.files && r.files.length > 0 ? r.files : [null];
-    // For Ollama results: all tags (except bare "N variants") stored for capability filter
-    const ollamaCaps = r.source === 'ollama'
-      ? JSON.stringify(
-          (r.tags || [])
-            .filter(t => !/^\d+\s+variants?$/i.test(t.trim()))
-            .map(t => t.trim().toLowerCase())
-        )
-      : null;
-    rawFiles.forEach((fileObj, fi) => {
-      const fname = fileObj ? (typeof fileObj === 'object' ? fileObj.name : fileObj) : null;
-      const fsize = fileObj && typeof fileObj === 'object' ? fileObj.size_bytes : null;
-      const key = r.repo_id + '||' + (fname || '');
+    if (r.source === 'ollama') {
+      // ── Ollama: placeholder row per model; auto-expanded by autoExpandAllOllamaModels ──
+      const modelBase = r.ollama_model
+        ? r.ollama_model.split(':')[0]
+        : r.repo_id.replace('ollama/', '');
       const tr = document.createElement('tr');
-      tr.dataset.key = key;
-      // Store size_bytes on the row so the size filter can read it
-      if (fsize != null) tr.dataset.sizeBytes = fsize;
-      // Store capability tags on all rows of this result for Ollama cap filter
-      if (ollamaCaps !== null) tr.dataset.caps = ollamaCaps;
-
-      // checkbox — не рендерим для строк без файла (нет смысла выбирать)
-      const tdCb = document.createElement('td');
-      if (fname) {
-        const cb = document.createElement('input');
-        cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
-        cb.onchange = () => hfSelectionChange(cb, r, fname);
-        tdCb.appendChild(cb);
-      }
-      tr.appendChild(tdCb);
-
-      // repo — только на первой строке файлов репозитория
-      if (fi === 0) {
-        const tdRepo = document.createElement('td');
-        tdRepo.className = 'cell-hf-repo';
-        if (rawFiles.length > 1) tdRepo.rowSpan = rawFiles.length;
-        const isOllamaResult = r.source === 'ollama';
-        const repoHref = isOllamaResult
-          ? `https://ollama.com/library/${escHtml(r.ollama_model ? r.ollama_model.split(':')[0] : r.repo_id.replace('ollama/',''))}`
-          : `https://huggingface.co/${escHtml(r.repo_id)}`;
-        const resultSourceBadge = isOllamaResult
-          ? '<span class="badge-ollama" title="Ollama Registry">OLLAMA</span>'
-          : '';
-        const pipelineBadge = r.pipeline_tag
-          ? `<span class="hf-pipeline-badge">${escHtml(r.pipeline_tag)}</span>` : '';
-        const likesHtml = r.likes > 0
-          ? `<span class="hf-likes">♥ ${fmtNum(r.likes)}</span>` : '';
-        const descHtml = r.description
-          ? `<span class="hf-desc">${escHtml(r.description)}</span>` : '';
-        tdRepo.innerHTML =
-          `<a href="${repoHref}" target="_blank">${escHtml(r.repo_id)}</a>` +
-          resultSourceBadge +
-          (r.gated ? '<span class="gated-badge">GATED</span>' : '') +
-          (pipelineBadge || likesHtml || descHtml
-            ? `<div class="cell-hf-meta">${pipelineBadge}${likesHtml}${descHtml}</div>` : '');
-        tr.appendChild(tdRepo);
-      }
-
-      // filename + size (size on new line for readability)
-      const tdFile = document.createElement('td');
-      tdFile.className = 'cell-hf-files';
-      if (fname) {
-        const sizeNote = (r.source === 'ollama' && fsize != null)
-          ? ` <span class="file-size-tag" title="Размер тега latest; изменится при выборе варианта">latest</span>`
-          : '';
-        const sizeHtml = fsize != null
-          ? `<span class="file-size ollama-file-size" style="display:block;margin-top:2px">${fmtSize(fsize)}${sizeNote}</span>`
-          : (r.source === 'ollama' ? `<span class="file-size ollama-file-size" style="display:block;margin-top:2px;color:var(--text-muted)">размер неизвестен</span>` : '');
-        tdFile.innerHTML = `<span class="file-item"><span class="file-item-name">${escHtml(fname)}</span>${sizeHtml}</span>`;
-        // For Ollama results: add variant picker button (lazy-loads tags on click)
-        if (r.source === 'ollama') {
-          const variantBtn = document.createElement('button');
-          variantBtn.className = 'ollama-variant-btn';
-          variantBtn.textContent = '▾ выбрать вариант';
-          const modelBase = r.ollama_model
-            ? r.ollama_model.split(':')[0]
-            : r.repo_id.replace('ollama/', '');
-          variantBtn.onclick = () => loadOllamaTags(variantBtn, modelBase, r, key);
-          tdFile.appendChild(variantBtn);
-        }
-      } else {
-        tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов по фильтру</span>`;
-      }
-      tr.appendChild(tdFile);
-
-      // downloads + likes — только на первой строке
-      if (fi === 0) {
-        const tdDl = document.createElement('td');
-        tdDl.className = 'downloads';
-        if (rawFiles.length > 1) tdDl.rowSpan = rawFiles.length;
-        tdDl.textContent = fmtNum(r.downloads);
-        tr.appendChild(tdDl);
-
-        const tdTags = document.createElement('td');
-        if (rawFiles.length > 1) tdTags.rowSpan = rawFiles.length;
-        // "N variants" tag gets a tooltip explaining it = number of size variants on ollama.com
-        const tagHtml = (r.tags || []).slice(0, 6).map(t => {
-          const isVariants = /^\d+\s+variants?$/i.test(t.trim());
-          const tip = isVariants
-            ? ` title="Количество вариантов размера/квантизации на ollama.com (7b, 14b, 32b…)"`
-            : '';
-          return `<span class="tag"${tip}>${escHtml(t)}</span>`;
-        }).join('');
-        tdTags.innerHTML = `<div class="tags-cell">${tagHtml}</div>`;
-        tr.appendChild(tdTags);
-      }
-
+      tr.className = 'ollama-loading-row';
+      tr.dataset.modelBase = modelBase;
+      const td = document.createElement('td');
+      td.colSpan = 8;
+      td.innerHTML = `<span style="opacity:0.45">⏳</span> загрузка вариантов ` +
+        `<strong style="color:var(--text-primary)">${escHtml(modelBase)}</strong>…`;
+      tr.appendChild(td);
       tbody.appendChild(tr);
-    });
+
+    } else {
+      // ── HuggingFace: original multi-file-row rendering ────────────────────────
+      const rawFiles = r.files && r.files.length > 0 ? r.files : [null];
+      rawFiles.forEach((fileObj, fi) => {
+        const fname = fileObj ? (typeof fileObj === 'object' ? fileObj.name : fileObj) : null;
+        const fsize = fileObj && typeof fileObj === 'object' ? fileObj.size_bytes : null;
+        const key = r.repo_id + '||' + (fname || '');
+        const tr = document.createElement('tr');
+        tr.dataset.key = key;
+        if (fsize != null) tr.dataset.sizeBytes = fsize;
+
+        // checkbox
+        const tdCb = document.createElement('td');
+        if (fname) {
+          const cb = document.createElement('input');
+          cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
+          cb.onchange = () => hfSelectionChange(cb, r, fname);
+          tdCb.appendChild(cb);
+        }
+        tr.appendChild(tdCb);
+
+        // repo — только на первой строке
+        if (fi === 0) {
+          const tdRepo = document.createElement('td');
+          tdRepo.className = 'cell-hf-repo';
+          if (rawFiles.length > 1) tdRepo.rowSpan = rawFiles.length;
+          const pipelineBadge = r.pipeline_tag
+            ? `<span class="hf-pipeline-badge">${escHtml(r.pipeline_tag)}</span>` : '';
+          const likesHtml = r.likes > 0
+            ? `<span class="hf-likes">♥ ${fmtNum(r.likes)}</span>` : '';
+          const descHtml = r.description
+            ? `<span class="hf-desc">${escHtml(r.description)}</span>` : '';
+          tdRepo.innerHTML =
+            `<a href="https://huggingface.co/${escHtml(r.repo_id)}" target="_blank">${escHtml(r.repo_id)}</a>` +
+            (r.gated ? '<span class="gated-badge">GATED</span>' : '') +
+            (pipelineBadge || likesHtml || descHtml
+              ? `<div class="cell-hf-meta">${pipelineBadge}${likesHtml}${descHtml}</div>` : '');
+          tr.appendChild(tdRepo);
+        }
+
+        // filename + size
+        const tdFile = document.createElement('td');
+        tdFile.className = 'cell-hf-files';
+        if (fname) {
+          const sizeHtml = fsize != null
+            ? `<span class="file-size" style="display:block;margin-top:2px">${fmtSize(fsize)}</span>` : '';
+          tdFile.innerHTML = `<span class="file-item"><span class="file-item-name">${escHtml(fname)}</span>${sizeHtml}</span>`;
+        } else {
+          tdFile.innerHTML = `<span style="color:var(--text-muted);font-style:italic">нет файлов по фильтру</span>`;
+        }
+        tr.appendChild(tdFile);
+
+        // downloads + tags — на первой строке
+        if (fi === 0) {
+          const tdDl = document.createElement('td');
+          tdDl.className = 'downloads';
+          if (rawFiles.length > 1) tdDl.rowSpan = rawFiles.length;
+          tdDl.textContent = fmtNum(r.downloads);
+          tr.appendChild(tdDl);
+
+          const tdTags = document.createElement('td');
+          if (rawFiles.length > 1) tdTags.rowSpan = rawFiles.length;
+          const tagHtml = (r.tags || []).slice(0, 6).map(t =>
+            `<span class="tag">${escHtml(t)}</span>`
+          ).join('');
+          tdTags.innerHTML = `<div class="tags-cell">${tagHtml}</div>`;
+          tr.appendChild(tdTags);
+        }
+
+        tbody.appendChild(tr);
+      });
+    }
   });
 
-  // For Ollama: rebuild capability chips for filtering
   const isOllamaSearch = results.length > 0 && results[0].source === 'ollama';
+
+  // Update table header for Ollama (8 cols) vs HF (5 cols)
+  _updateOllamaTableHead(isOllamaSearch);
+
   if (isOllamaSearch) {
+    // Hide vtag chips — no variants loaded yet
+    const vtagGroup = document.getElementById('ollama-vtag-group');
+    if (vtagGroup) vtagGroup.style.display = 'none';
+    // Build capability chips from model-level tags
     rebuildOllamaCapsChips(results);
+    // Auto-load all variant tags in parallel (replaces placeholder rows)
+    autoExpandAllOllamaModels(results);
   } else {
     const capsRow = document.getElementById('ollama-caps-row');
     if (capsRow) capsRow.style.display = 'none';
+    // Apply HF file size filter
+    hfApplySizeFilter();
   }
+}
 
-  // Apply size filter after rendering
-  hfApplySizeFilter();
+// ── Ollama table header switching ─────────────────────────────────────────────
+
+function _updateOllamaTableHead(isOllama) {
+  const thead = document.querySelector('#hf-results-wrapper table thead tr');
+  if (!thead) return;
+  if (isOllama) {
+    thead.innerHTML =
+      '<th><input type="checkbox" class="select-cb" id="hf-select-all" onchange="hfToggleAll(this)"></th>' +
+      '<th>Модель</th><th>Вариант</th><th>Размер</th><th>Контекст</th><th>Input</th><th>Загрузки</th><th>Теги</th>';
+  } else {
+    thead.innerHTML =
+      '<th><input type="checkbox" class="select-cb" id="hf-select-all" onchange="hfToggleAll(this)"></th>' +
+      '<th>Репозиторий</th><th>Файлы</th><th>Загрузки</th><th>Теги</th>';
+  }
+}
+
+// ── Ollama auto-expand (flat variant list) ─────────────────────────────────────
+
+async function autoExpandAllOllamaModels(results) {
+  const ollamaResults = results.filter(r => r.source === 'ollama');
+  await Promise.all(ollamaResults.map(r => _autoExpandOllamaModel(r)));
+  _rebuildVariantTagChips();
+  applyOllamaVariantFilter();
+}
+
+async function _autoExpandOllamaModel(r) {
+  const modelBase = r.ollama_model
+    ? r.ollama_model.split(':')[0]
+    : r.repo_id.replace('ollama/', '');
+  const tbody = document.getElementById('hf-results-body');
+  const placeholder = tbody?.querySelector(`.ollama-loading-row[data-model-base="${CSS.escape(modelBase)}"]`);
+
+  try {
+    const resp = await fetch(`/api/ollama/tags?model=${encodeURIComponent(modelBase)}`);
+    const tagsRaw = (await resp.json()).tags || [];
+    if (!tagsRaw.length) { if (placeholder) placeholder.remove(); return; }
+    // Support both legacy string[] and current {name, size_bytes}[] format
+    const tags = tagsRaw.map(t => typeof t === 'string' ? {name: t, size_bytes: 0} : t);
+
+    // Extract context window: try multiple description patterns
+    const desc = r.description || '';
+    const ctxRaw = (
+      /\b(\d+[kK])\s*(?:token|context|ctx)/i.exec(desc) ||
+      /up\s+to\s+(\d+[kK])/i.exec(desc) ||
+      /(?:context|ctx)(?:\s+window)?(?:\s+length)?\s+(?:of\s+)?(\d+[kK])/i.exec(desc)
+    )?.[1] || '';
+    const ctxStr = ctxRaw.replace(/\s+/g, '');
+
+    // Determine input type from capability tags
+    const hasVision = (r.tags || []).some(t => /\bvision\b/i.test(t));
+    const hasAudio  = (r.tags || []).some(t => /\baudio\b|\bspeech\b/i.test(t));
+    const inputType = hasVision ? 'text+img' : hasAudio ? 'text+audio' : 'text';
+
+    const rows = tags.map(t => _makeOllamaVariantRow(r, t.name, modelBase, ctxStr, inputType, t.size_bytes));
+
+    if (placeholder && rows.length) {
+      let insertAfter = placeholder;
+      for (const row of rows) {
+        insertAfter.insertAdjacentElement('afterend', row);
+        insertAfter = row;
+      }
+      placeholder.remove();
+    } else if (placeholder) {
+      placeholder.remove();
+    }
+  } catch (_e) {
+    if (placeholder) {
+      const td = placeholder.querySelector('td');
+      if (td) td.innerHTML = `⚠ ошибка загрузки <strong>${escHtml(modelBase)}</strong>`;
+    }
+  }
+}
+
+function _makeOllamaVariantRow(r, tag, modelBase, ctxStr, inputType, sizeBytes = 0) {
+  const ollamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
+  const filename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
+  const key = r.repo_id + '||' + filename;
+  const derivedTags = _deriveOllamaVariantTags(r.tags, tag);
+
+  const variantTr = document.createElement('tr');
+  variantTr.className = 'ollama-variant-row';
+  variantTr.dataset.modelBase = modelBase;
+  variantTr.dataset.variantTag = tag;
+  variantTr.dataset.key = key;
+  variantTr.dataset.caps = JSON.stringify(derivedTags.map(t => t.toLowerCase()));
+  variantTr.dataset.vtags = JSON.stringify(derivedTags.map(t => t.toLowerCase()));
+  variantTr.dataset.ctxK = _parseCtxK(ctxStr);
+  variantTr.dataset.inputType = inputType;
+
+  // Col 1: checkbox
+  const tdCb = document.createElement('td');
+  const cb = document.createElement('input');
+  cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
+  cb.onchange = () => ollamaVariantSelectionChange(cb, r, tag, modelBase, ollamaModel, filename);
+  tdCb.appendChild(cb);
+  variantTr.appendChild(tdCb);
+
+  // Col 2: model name + badge
+  const tdModel = document.createElement('td');
+  tdModel.className = 'cell-hf-repo';
+  const repoHref = `https://ollama.com/library/${encodeURIComponent(modelBase)}`;
+  tdModel.innerHTML =
+    `<a href="${repoHref}" target="_blank">${escHtml(modelBase)}</a>` +
+    '<span class="badge-ollama" title="Ollama Registry">OLLAMA</span>';
+  variantTr.appendChild(tdModel);
+
+  // Col 3: variant tag (monospace)
+  const tdVariant = document.createElement('td');
+  tdVariant.className = 'cell-hf-files';
+  tdVariant.innerHTML = `<span class="variant-tag-label">${escHtml(tag)}</span>`;
+  variantTr.appendChild(tdVariant);
+
+  // Col 4: size — from HTML scraping (immediate) or OCI registry (async fallback)
+  const tdSize = document.createElement('td');
+  tdSize.className = 'ollama-col-size';
+  const sizeSpan = document.createElement('span');
+  sizeSpan.className = 'variant-size-label';
+  if (sizeBytes > 0) {
+    sizeSpan.textContent = fmtSize(sizeBytes);
+    variantTr.dataset.sizeBytes = sizeBytes;
+  } else {
+    sizeSpan.textContent = '…';
+    _loadOllamaVariantSize(sizeSpan, ollamaModel, variantTr); // async fallback
+  }
+  tdSize.appendChild(sizeSpan);
+  variantTr.appendChild(tdSize);
+
+  // Col 5: context window
+  const tdCtx = document.createElement('td');
+  tdCtx.className = 'ollama-col-ctx';
+  tdCtx.textContent = ctxStr || '—';
+  variantTr.appendChild(tdCtx);
+
+  // Col 6: input type
+  const tdInput = document.createElement('td');
+  tdInput.className = 'ollama-col-input';
+  tdInput.textContent = inputType;
+  variantTr.appendChild(tdInput);
+
+  // Col 7: downloads
+  const tdDl = document.createElement('td');
+  tdDl.className = 'downloads';
+  tdDl.textContent = fmtNum(r.downloads);
+  variantTr.appendChild(tdDl);
+
+  // Col 8: capability tags (model-level, no "N variants" noise)
+  const tdTags = document.createElement('td');
+  const capTags = (r.tags || [])
+    .filter(t => !/^\d+\s+variants?$/i.test(t.trim()))
+    .slice(0, 4);
+  tdTags.innerHTML = `<div class="tags-cell">${capTags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>`;
+  variantTr.appendChild(tdTags);
+
+  return variantTr;
 }
 
 // ── Ollama capability / tag filter ──────────────────────────────────────────
@@ -2422,61 +2664,88 @@ function applyOllamaCapsFilter() {
     .map(c => c.dataset.cap);
   const tbody = document.getElementById('hf-results-body');
   if (!tbody) return;
-  let visible = 0;
-  const rows = tbody.querySelectorAll('tr');
-  rows.forEach(tr => {
-    if (activeCaps.length === 0) { tr.style.display = ''; visible++; return; }
+  let visible = 0, total = 0;
+  // Filter directly on variant rows (flat structure, no model-header intermediary)
+  tbody.querySelectorAll('tr.ollama-variant-row').forEach(tr => {
+    total++;
     const rowCaps = JSON.parse(tr.dataset.caps || '[]');
-    const show = activeCaps.some(ac => rowCaps.includes(ac));
+    const show = activeCaps.length === 0 || activeCaps.some(ac => rowCaps.includes(ac));
     tr.style.display = show ? '' : 'none';
-    if (show) visible++;
+    if (!show) {
+      const cb = tr.querySelector('.select-cb');
+      if (cb && cb.checked) { cb.checked = false; hfSelected.delete(cb.dataset.key); }
+    } else {
+      visible++;
+    }
   });
-  // Update inline count badge in results controls bar
   const countEl = document.getElementById('hf-results-count');
   if (countEl) {
     countEl.textContent = activeCaps.length > 0
-      ? `Фильтр: ${visible} / ${rows.length}`
+      ? `Фильтр: ${visible} / ${total} вариантов`
       : '';
   }
+  // Re-apply variant text/size filter on top of caps filter
+  applyOllamaVariantFilter();
 }
 
 function hfSelectionChange(cb, r, fname) {
+  // Used for HuggingFace rows only (Ollama uses ollamaVariantSelectionChange)
   const key = r.repo_id + '||' + (fname || '');
   if (cb.checked) {
-    // For Ollama rows: pick up selected variant if picker is open
-    let effectiveOllamaModel = r.ollama_model || '';
-    let effectiveFilename    = fname || '';
-    if (r.source === 'ollama') {
-      const variantSel = cb.closest('tr')?.querySelector('.ollama-tag-select');
-      if (variantSel && variantSel.value) {
-        const tag       = variantSel.value;
-        const modelBase = effectiveOllamaModel.split(':')[0] || r.repo_id.replace('ollama/', '');
-        effectiveOllamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
-        effectiveFilename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
-      }
-    }
     hfSelected.set(key, {
-      repo_id: r.repo_id, filename: effectiveFilename, gated: r.gated,
+      repo_id: r.repo_id, filename: fname || '', gated: r.gated,
       tags: r.tags || [], description: r.description || '',
       pipeline_tag: r.pipeline_tag || '',
       source: r.source || 'huggingface',
-      ollama_model: effectiveOllamaModel,
+      ollama_model: '',
     });
   } else {
     hfSelected.delete(key);
   }
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
-  const allCbs = document.querySelectorAll('#hf-results-body .select-cb');
-  const checked = document.querySelectorAll('#hf-results-body .select-cb:checked').length;
+  _updateSelectAllState();
+}
+
+function _updateSelectAllState() {
+  // Count only visible checkboxes (hidden rows are always unchecked by filters)
+  const allCbs = [...document.querySelectorAll('#hf-results-body .select-cb')]
+    .filter(cb => cb.closest('tr')?.style.display !== 'none');
+  const checked = allCbs.filter(cb => cb.checked).length;
   document.getElementById('hf-select-all').checked = allCbs.length > 0 && checked === allCbs.length;
   document.getElementById('hf-select-all').indeterminate = checked > 0 && checked < allCbs.length;
 }
 
 function hfToggleAll(masterCb) {
   document.querySelectorAll('#hf-results-body .select-cb').forEach(cb => {
-    if (cb.closest('tr').style.display === 'none') return; // skip filtered-out rows
+    const tr = cb.closest('tr');
+    if (!tr || tr.style.display === 'none') return; // skip filtered-out rows
     cb.checked = masterCb.checked;
     const key = cb.dataset.key;
+
+    // Ollama variant rows store data on the row itself via data attrs
+    if (tr.classList.contains('ollama-variant-row')) {
+      const modelBase = tr.dataset.modelBase || '';
+      const tag = tr.dataset.variantTag || '';
+      const ollamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
+      const [repo_id, filename] = key.split('||');
+      const r = hfResults.find(x => x.repo_id === repo_id);
+      if (!r) return;
+      if (masterCb.checked) {
+        hfSelected.set(key, {
+          repo_id, filename, gated: r.gated || false,
+          tags: _deriveOllamaVariantTags(r.tags, tag),
+          description: r.description || '',
+          pipeline_tag: '',
+          source: 'ollama',
+          ollama_model: ollamaModel,
+        });
+      } else {
+        hfSelected.delete(key);
+      }
+      return;
+    }
+
+    // HuggingFace rows
     const [repo_id, fname] = key.split('||');
     const r = hfResults.find(x => x.repo_id === repo_id);
     if (!r) return;
@@ -2486,7 +2755,7 @@ function hfToggleAll(masterCb) {
         tags: r.tags || [], description: r.description || '',
         pipeline_tag: r.pipeline_tag || '',
         source: r.source || 'huggingface',
-        ollama_model: r.ollama_model || '',
+        ollama_model: '',
       });
     } else {
       hfSelected.delete(key);
@@ -2522,100 +2791,426 @@ function hfApplySizeFilter() {
   document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
 }
 
-// ── Ollama variant (tag) picker ───────────────────────────────────────────────
+// ── Ollama variant expand/collapse ────────────────────────────────────────────
 
-async function loadOllamaTags(btn, modelBase, r, key) {
+async function expandOllamaModel(btn, headerTr, modelBase, r) {
+  // If already expanded — collapse
+  if (btn.classList.contains('expanded')) {
+    collapseOllamaModel(btn, headerTr, modelBase);
+    return;
+  }
+
   btn.disabled = true;
-  btn.textContent = '⏳ загрузка...';
+  btn.innerHTML = '⏳ <span style="font-size:0.7rem">загрузка…</span>';
+
   try {
     const resp = await fetch(`/api/ollama/tags?model=${encodeURIComponent(modelBase)}`);
     const data = await resp.json();
     const tags = data.tags || [];
+
     if (!tags.length) {
-      btn.textContent = '▾ нет вариантов';
+      btn.innerHTML = '⚠ <span style="font-size:0.7rem">нет вариантов</span>';
       btn.disabled = false;
       return;
     }
-    // Replace button with <select>, grouped by base size for large lists
-    const sel = document.createElement('select');
-    sel.className = 'ollama-tag-select';
-    sel.title = 'Выбрать вариант размера/квантизации';
 
-    // Group tags by leading size token (e.g. "7b", "14b", "0.5b")
-    // Tags that don't match go into "__other__"; "latest" stays first.
-    const groups = new Map();
-    const _sizeRe = /^(\d+(?:\.\d+)?[bBmMgG])/i;
-    for (const t of tags) {
-      const m = _sizeRe.exec(t);
-      const key = m ? m[1].toLowerCase()
-                    : (t === 'latest' ? '__latest__' : '__other__');
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(t);
+    // Update hint cell to show count + collapse option
+    const hintTd = headerTr.querySelector('.ollama-expand-hint');
+    if (hintTd) {
+      hintTd.innerHTML = `<span style="color:var(--text-muted);font-size:0.75rem">${tags.length} вар.</span>`;
     }
 
-    if (groups.size > 2) {
-      // More than two groups → use <optgroup> per size
-      for (const [key, groupTags] of groups) {
-        const grp = document.createElement('optgroup');
-        grp.label = key === '__latest__' ? '— latest —'
-                  : key === '__other__'  ? '— other —'
-                  : key;
-        for (const t of groupTags) {
-          const opt = document.createElement('option');
-          opt.value = t; opt.textContent = t;
-          if (t === 'latest') opt.selected = true;
-          grp.appendChild(opt);
-        }
-        sel.appendChild(grp);
-      }
-    } else {
-      // Few tags — flat list
-      for (const t of tags) {
-        const opt = document.createElement('option');
-        opt.value = t; opt.textContent = t;
-        if (t === 'latest') opt.selected = true;
-        sel.appendChild(opt);
+    // Show context window from description (e.g. "128K context")
+    const ctxM = /(\d+\s*[kK]?)\s*(?:context|ctx|контекст|tokens? context|k context)/i.exec(r.description || '');
+    if (ctxM) {
+      const ctxBadge = document.createElement('span');
+      ctxBadge.className = 'variant-ctx-badge';
+      ctxBadge.title = 'Размер контекстного окна (input)';
+      ctxBadge.textContent = `⬚ ${ctxM[1].replace(/\s*/g, '')} ctx`;
+      const repoTd = headerTr.querySelector('.cell-hf-repo');
+      if (repoTd) {
+        let metaDiv = repoTd.querySelector('.cell-hf-meta');
+        if (!metaDiv) { metaDiv = document.createElement('div'); metaDiv.className = 'cell-hf-meta'; repoTd.appendChild(metaDiv); }
+        metaDiv.appendChild(ctxBadge);
       }
     }
 
-    sel.onchange = () => onOllamaVariantChange(sel, modelBase, r, key);
-    btn.replaceWith(sel);
+    // Mark button as expanded
+    btn.classList.add('expanded');
+    btn.innerHTML = '▴ <span style="font-size:0.7rem">свернуть</span>';
+    btn.disabled = false;
+
+    const tbody = headerTr.parentElement;
+    let insertAfter = headerTr;
+
+    // Create one row per variant tag
+    for (const tag of tags) {
+      const ollamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
+      const filename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
+      const key = r.repo_id + '||' + filename;
+
+      // Pre-compute derived tags for this variant (used by tag-chip filter)
+      const derivedTags = _deriveOllamaVariantTags(r.tags, tag);
+
+      const variantTr = document.createElement('tr');
+      variantTr.className = 'ollama-variant-row';
+      variantTr.dataset.modelBase = modelBase;
+      variantTr.dataset.variantTag = tag;
+      variantTr.dataset.key = key;
+      variantTr.dataset.caps = headerTr.dataset.caps || '[]';
+      variantTr.dataset.vtags = JSON.stringify(derivedTags.map(t => t.toLowerCase()));
+
+      // Col 1: checkbox
+      const tdCb = document.createElement('td');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'select-cb'; cb.dataset.key = key;
+      cb.onchange = () => ollamaVariantSelectionChange(cb, r, tag, modelBase, ollamaModel, filename);
+      tdCb.appendChild(cb);
+      variantTr.appendChild(tdCb);
+
+      // Col 2: empty (model name is on the header row)
+      variantTr.appendChild(document.createElement('td'));
+
+      // Col 3: tag label + size (loaded lazily)
+      const tdFile = document.createElement('td');
+      tdFile.className = 'cell-hf-files';
+      const sizeSpan = document.createElement('span');
+      sizeSpan.className = 'variant-size-label';
+      sizeSpan.textContent = '…';
+      tdFile.innerHTML = `<span class="variant-tag-label">${escHtml(tag)}</span>`;
+      tdFile.appendChild(sizeSpan);
+      variantTr.appendChild(tdFile);
+
+      // Col 4 & 5: empty (shown on header)
+      variantTr.appendChild(document.createElement('td'));
+      variantTr.appendChild(document.createElement('td'));
+
+      // Insert after previous row (maintains order)
+      insertAfter.insertAdjacentElement('afterend', variantTr);
+      insertAfter = variantTr;
+
+      // Lazy-load size for this variant
+      _loadOllamaVariantSize(sizeSpan, ollamaModel, variantTr);
+    }
+
+    // Rebuild variant-tag chips (dynamic — from all loaded variants)
+    _rebuildVariantTagChips();
+
+    // Re-apply any active variant filter
+    applyOllamaVariantFilter();
+
   } catch (_e) {
-    btn.textContent = '⚠ ошибка';
+    btn.innerHTML = '⚠ <span style="font-size:0.7rem">ошибка</span>';
     btn.disabled = false;
   }
 }
 
-async function onOllamaVariantChange(sel, modelBase, r, key) {
-  const tag = sel.value;
-  const newOllamaModel = (tag === 'latest') ? modelBase : `${modelBase}:${tag}`;
-  const newFilename    = (tag === 'latest') ? `${modelBase}.gguf` : `${modelBase}-${tag}.gguf`;
-  const td = sel.closest('td');
-  // Update the displayed filename
-  const nameEl = td?.querySelector('.file-item-name');
-  if (nameEl) nameEl.textContent = newFilename;
-  // Update hfSelected entry if row is checked
-  if (hfSelected.has(key)) {
-    const entry = hfSelected.get(key);
-    entry.ollama_model = newOllamaModel;
-    entry.filename     = newFilename;
-  }
-  // Fetch and update the size for the selected variant
-  const sizeEl = td?.querySelector('.ollama-file-size');
-  if (sizeEl) {
-    sizeEl.textContent = 'размер…';
-    try {
-      const resp = await fetch(`/api/ollama/size?model=${encodeURIComponent(newOllamaModel)}`);
-      const data = await resp.json();
-      if (data.size_bytes > 0) {
-        sizeEl.textContent = fmtSize(data.size_bytes);
-      } else {
-        sizeEl.textContent = 'размер неизвестен';
-      }
-    } catch (_e) {
-      sizeEl.textContent = 'размер неизвестен';
+function collapseOllamaModel(btn, headerTr, modelBase) {
+  // Remove all variant rows for this model
+  const tbody = headerTr.parentElement;
+  const variantRows = tbody.querySelectorAll(
+    `.ollama-variant-row[data-model-base="${CSS.escape(modelBase)}"]`
+  );
+  variantRows.forEach(tr => {
+    // Uncheck and remove from selection
+    const cb = tr.querySelector('.select-cb');
+    if (cb && cb.checked && cb.dataset.key) {
+      hfSelected.delete(cb.dataset.key);
     }
+    tr.remove();
+  });
+
+  // Restore hint cell
+  const hintTd = headerTr.querySelector('.ollama-expand-hint');
+  if (hintTd) {
+    hintTd.innerHTML = `<span style="color:var(--text-muted);font-size:0.78rem">нажмите ▾ чтобы развернуть варианты</span>`;
   }
+
+  btn.classList.remove('expanded');
+  btn.innerHTML = `▾ <span style="font-size:0.7rem">вар.</span>`;
+
+  // If no more expanded models — hide all variant filter rows
+  const anyVariants = tbody.querySelector('.ollama-variant-row');
+  if (!anyVariants) {
+    // Hide variant tag group within caps row (no variants loaded)
+    const vtagGroup = document.getElementById('ollama-vtag-group');
+    if (vtagGroup) vtagGroup.style.display = 'none';
+    // Clear only vtag chip active states (prefilter inputs remain — they're search params)
+    document.querySelectorAll('#ollama-vtag-chips .filter-chip.active')
+      .forEach(c => c.classList.remove('active'));
+  } else {
+    // Still have variants — rebuild tag chips without this model's tags
+    _rebuildVariantTagChips();
+  }
+  // Remove context badge if it was added (re-added on next expand)
+  headerTr.querySelectorAll('.variant-ctx-badge').forEach(el => el.remove());
+
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+  _updateSelectAllState();
+}
+
+async function _loadOllamaVariantSize(sizeSpan, ollamaModel, variantTr) {
+  try {
+    const resp = await fetch(`/api/ollama/size?model=${encodeURIComponent(ollamaModel)}`);
+    const data = await resp.json();
+    if (data.size_bytes > 0) {
+      sizeSpan.textContent = fmtSize(data.size_bytes);
+      variantTr.dataset.sizeBytes = data.size_bytes;
+      // Re-apply GB filter if it was active when size was unknown
+      const minGbVal = document.getElementById('ollama-min-gb')?.value.trim();
+      const maxGbVal = document.getElementById('ollama-max-gb')?.value.trim();
+      if (minGbVal || maxGbVal) applyOllamaVariantFilter();
+    } else {
+      sizeSpan.textContent = '—';
+    }
+  } catch (_e) {
+    sizeSpan.textContent = '—';
+  }
+}
+
+// Derive per-variant tags: base capability tags (no "cloud"/"N variants") + size/quant from tag name
+function _deriveOllamaVariantTags(modelTags, variantTag) {
+  const EXCL_RE = /^\d+\s+variants?$/i;
+  const CLOUD_RE = /^cloud$/i;
+  // Base capability tags — strip "N variants" and "cloud" (deployment-type, not for local)
+  const base = (modelTags || []).filter(t => {
+    const s = t.trim();
+    return s && !EXCL_RE.test(s) && !CLOUD_RE.test(s);
+  });
+  const extra = [];
+  if (variantTag && variantTag !== 'latest') {
+    // Size: 7b, 14b, 0.5b, 1.5b, 72b …
+    const sizeM = /^(\d+(?:\.\d+)?[bBmM])/i.exec(variantTag);
+    if (sizeM) extra.push(sizeM[1].toLowerCase());
+    // Quantization: q4_K_M, q8_0, fp16, bf16, f16 …
+    const quantM = /(q\d+[_\-][A-Z0-9_]+|fp16|bf16|f16)/i.exec(variantTag);
+    if (quantM) extra.push(quantM[1].toLowerCase());
+    // instruction-tuned marker
+    if (/\binstruct\b/i.test(variantTag) &&
+        !base.some(t => /\binstruct\b/i.test(t)) &&
+        !extra.some(t => /\binstruct\b/i.test(t))) extra.push('instruct');
+  }
+  // Deduplicate preserving order
+  const seen = new Set(base.map(t => t.toLowerCase()));
+  const result = [...base];
+  for (const t of extra) {
+    if (!seen.has(t.toLowerCase())) { result.push(t); seen.add(t.toLowerCase()); }
+  }
+  return result;
+}
+
+function ollamaVariantSelectionChange(cb, r, tag, modelBase, ollamaModel, filename) {
+  const key = r.repo_id + '||' + filename;
+  if (cb.checked) {
+    hfSelected.set(key, {
+      repo_id: r.repo_id,
+      filename,
+      gated: r.gated || false,
+      tags: _deriveOllamaVariantTags(r.tags, tag),
+      description: r.description || '',
+      pipeline_tag: '',
+      source: 'ollama',
+      ollama_model: ollamaModel,
+    });
+  } else {
+    hfSelected.delete(key);
+  }
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+  _updateSelectAllState();
+}
+
+// ── Variant tag chips (dynamic — from all loaded variant rows) ─────────────────
+
+function _rebuildVariantTagChips() {
+  const group = document.getElementById('ollama-vtag-group');
+  const chips = document.getElementById('ollama-vtag-chips');
+  if (!group || !chips) return;
+
+  // Collect all unique vtags across all visible variant rows
+  const tagCount = new Map();
+  document.querySelectorAll('#hf-results-body .ollama-variant-row').forEach(tr => {
+    const vtags = JSON.parse(tr.dataset.vtags || '[]');
+    const seen = new Set();
+    vtags.forEach(t => {
+      if (!t || seen.has(t)) return;
+      seen.add(t);
+      tagCount.set(t, (tagCount.get(t) || 0) + 1);
+    });
+  });
+
+  if (tagCount.size === 0) { group.style.display = 'none'; return; }
+
+  chips.innerHTML = '';
+  const allChip = document.createElement('span');
+  allChip.className = 'filter-chip active';
+  allChip.textContent = 'Все';
+  allChip.onclick = clearOllamaVtags;
+  chips.appendChild(allChip);
+
+  // Sort by frequency desc, then alpha
+  const sorted = [...tagCount.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  sorted.forEach(([tag, cnt]) => {
+    const chip = document.createElement('span');
+    chip.className = 'filter-chip';
+    chip.dataset.vtag = tag;
+    chip.innerHTML = escHtml(tag) + (cnt > 1 ? `<small style="opacity:0.6;font-size:0.72em"> (${cnt})</small>` : '');
+    chip.title = `Фильтр вариантов по тегу "${tag}"`;
+    chip.onclick = () => toggleOllamaVtag(chip);
+    chips.appendChild(chip);
+  });
+  group.style.display = '';
+}
+
+function clearOllamaVtags() {
+  document.querySelectorAll('#ollama-vtag-chips .filter-chip').forEach(c => {
+    c.classList.toggle('active', !c.dataset.vtag);
+  });
+  applyOllamaVariantFilter();
+}
+
+function toggleOllamaVtag(chip) {
+  chip.classList.toggle('active');
+  const anyActive = [...document.querySelectorAll('#ollama-vtag-chips .filter-chip[data-vtag]')]
+    .some(c => c.classList.contains('active'));
+  const allChip = document.querySelector('#ollama-vtag-chips .filter-chip:not([data-vtag])');
+  if (allChip) allChip.classList.toggle('active', !anyActive);
+  applyOllamaVariantFilter();
+}
+
+// ── Ollama variant filter (tag text + size GB + vtag chips + context + input) ─
+
+function applyOllamaVariantFilter() {
+  const filterVal = (document.getElementById('ollama-variant-filter')?.value || '').toLowerCase().trim();
+  const minGbVal  = document.getElementById('ollama-min-gb')?.value.trim();
+  const maxGbVal  = document.getElementById('ollama-max-gb')?.value.trim();
+  const GB = 1024 * 1024 * 1024;
+  const minBytes = minGbVal ? parseFloat(minGbVal) * GB : null;
+  const maxBytes = maxGbVal ? parseFloat(maxGbVal) * GB : null;
+
+  // Active vtag chips
+  const activeVtags = [...document.querySelectorAll('#ollama-vtag-chips .filter-chip[data-vtag].active')]
+    .map(c => c.dataset.vtag);
+
+  // Context filter: minimum K value (0 = any)
+  const ctxChip = document.querySelector('#ollama-ctx-chips .filter-chip.active');
+  const minCtxK = ctxChip ? parseInt(ctxChip.dataset.ctxMin || '0') : 0;
+
+  // Input type filter ('' = any)
+  const inputChip = document.querySelector('#ollama-input-chips .filter-chip.active');
+  const inputFilter = inputChip ? (inputChip.dataset.input || '') : '';
+
+  const tbody = document.getElementById('hf-results-body');
+  if (!tbody) return;
+
+  // Sync preset chip highlight (always — including when cleared to empty)
+  document.querySelectorAll('#ollama-variant-preset-chips .filter-chip[data-preset]').forEach(c => {
+    c.classList.toggle('active', filterVal !== '' && c.dataset.preset === filterVal);
+  });
+
+  tbody.querySelectorAll('.ollama-variant-row').forEach(tr => {
+    const tag = (tr.dataset.variantTag || '').toLowerCase();
+    let show = !filterVal || tag.includes(filterVal);
+
+    // Vtag chip filter
+    if (show && activeVtags.length > 0) {
+      const vtags = JSON.parse(tr.dataset.vtags || '[]');
+      show = activeVtags.some(av => vtags.includes(av));
+    }
+
+    // Size filter (only if size known)
+    if (show && (minBytes || maxBytes)) {
+      const sz = tr.dataset.sizeBytes != null ? parseFloat(tr.dataset.sizeBytes) : null;
+      if (sz != null) {
+        if (minBytes && !isNaN(minBytes) && sz < minBytes) show = false;
+        if (maxBytes && !isNaN(maxBytes) && sz > maxBytes) show = false;
+      }
+    }
+
+    // Context filter: hide rows with unknown or insufficient context
+    if (show && minCtxK > 0) {
+      const ctxK = parseInt(tr.dataset.ctxK || '0');
+      if (ctxK === 0 || ctxK < minCtxK) show = false;
+    }
+
+    // Input type filter
+    if (show && inputFilter) {
+      show = (tr.dataset.inputType || '') === inputFilter;
+    }
+
+    tr.style.display = show ? '' : 'none';
+    if (!show) {
+      const cb = tr.querySelector('.select-cb');
+      if (cb && cb.checked) { cb.checked = false; hfSelected.delete(cb.dataset.key); }
+    }
+  });
+
+  document.getElementById('hf-add-btn').disabled = hfSelected.size === 0;
+  _updateSelectAllState();
+}
+
+// Convert context string like "128K", "32k", "8" to numeric K value
+function _parseCtxK(ctxStr) {
+  if (!ctxStr) return 0;
+  const m = /^(\d+(?:\.\d+)?)\s*([kKmM]?)$/.exec(ctxStr.trim());
+  if (!m) return 0;
+  const num = parseFloat(m[1]);
+  const unit = m[2].toLowerCase();
+  if (unit === 'm') return Math.round(num * 1000);
+  if (unit === 'k') return Math.round(num);
+  return num > 1000 ? Math.round(num / 1024) : Math.round(num);
+}
+
+function setOllamaCtxFilter(chip) {
+  document.querySelectorAll('#ollama-ctx-chips .filter-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  applyOllamaVariantFilter();
+}
+
+function setOllamaInputFilter(chip) {
+  document.querySelectorAll('#ollama-input-chips .filter-chip').forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  applyOllamaVariantFilter();
+}
+
+function setOllamaVariantPreset(chip) {
+  const val = chip.dataset.preset || '';
+  const input = document.getElementById('ollama-variant-filter');
+  // Toggle: clicking active chip clears the filter
+  if (chip.classList.contains('active')) {
+    chip.classList.remove('active');
+    if (input) input.value = '';
+    applyOllamaVariantFilter();
+    return;
+  }
+  document.querySelectorAll('#ollama-variant-preset-chips .filter-chip[data-preset]')
+    .forEach(c => c.classList.remove('active'));
+  chip.classList.add('active');
+  if (input) input.value = val;
+  applyOllamaVariantFilter();
+}
+
+function clearOllamaVariantFilter() {
+  const input = document.getElementById('ollama-variant-filter');
+  if (input) input.value = '';
+  const minGb = document.getElementById('ollama-min-gb');
+  const maxGb = document.getElementById('ollama-max-gb');
+  if (minGb) minGb.value = '';
+  if (maxGb) maxGb.value = '';
+  document.querySelectorAll('#ollama-variant-preset-chips .filter-chip[data-preset]')
+    .forEach(c => c.classList.remove('active'));
+  // Reset vtag chips: "Все" → active, specific tags → inactive
+  document.querySelectorAll('#ollama-vtag-chips .filter-chip').forEach(c => {
+    c.classList.toggle('active', !c.dataset.vtag);
+  });
+  // Reset context chips: "Любой" → active
+  document.querySelectorAll('#ollama-ctx-chips .filter-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.ctxMin === '0');
+  });
+  // Reset input chips: "Все" → active
+  document.querySelectorAll('#ollama-input-chips .filter-chip').forEach(c => {
+    c.classList.toggle('active', c.dataset.input === '');
+  });
+  applyOllamaVariantFilter();
 }
 
 // ── helpers for add form pre-fill ─────────────────────────────────────────────

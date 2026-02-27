@@ -1,6 +1,6 @@
 ---
 # Component: Web UI Model Browser
-# Updated: 2026-02-22
+# Updated: 2026-02-27
 
 id: model-browser
 name: Web UI Model Browser
@@ -58,12 +58,13 @@ rest_api:
     request_body: "JSON [{repo_id, filename, dest_dir, tags, description, source, ollama_model, ...}]"
 
   GET /api/ollama/tags:
-    description: "List available variants (tags) for an Ollama model"
+    description: "List available variants (tags) for an Ollama model with pre-scraped sizes"
     query_params: "model={model_name}"
-    response: "JSON {tags: [str, ...]}"
+    response: "JSON {tags: [{name: str, size_bytes: int}, ...]}"
+    note: "sizes come from HTML scrape of ollama.com/library/{model}/tags — 1 HTTP request per model"
 
   GET /api/ollama/size:
-    description: "Get GGUF file size for a specific Ollama model:tag via OCI manifest"
+    description: "Get GGUF file size for a specific Ollama model:tag via OCI manifest (fallback when HTML scrape returns 0)"
     query_params: "model={model_tag}"
     response: "JSON {size_bytes: int | null}"
 
@@ -106,9 +107,12 @@ frontend_features:
   tab_ollama_search:
     - "Search by name on ollama.com"
     - "Capability filter buttons (tools, thinking, vision, embedding, cloud) with counts"
-    - "Variant picker: '▾ выбрать вариант' button → <select> grouped by base size (0.5b/7b/14b/…)"
-    - "Async size refresh on variant change via /api/ollama/size"
-    - "(latest) badge on size before variant is selected"
+    - "Pre-filters row (visible before search): quantization chips, size chips, context chips (8K+…200K+), input type chips (text/text+img/text+audio)"
+    - "Flat variant list: all model tags auto-expanded after search into individual rows"
+    - "Variant row columns: tag name, size (bytes), context window, input type, download count, extra tags"
+    - "Size loaded instantly from ollama.com/library/{model}/tags HTML scrape (1 request/model, not per-variant OCI calls)"
+    - "Async OCI fallback via /api/ollama/size only when HTML scrape returns size_bytes=0"
+    - "dataset.ctxK and dataset.inputType on each row for client-side filter"
     - "Multi-select checkboxes, batch add-to-models.yaml"
 
 dependencies:

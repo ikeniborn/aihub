@@ -56,6 +56,8 @@ _LIBRARY_BASE = "https://ollama.com/library"
 _TAG_PAGE_RE = re.compile(
     r'<span\s+class="group-hover:underline">[^:<]+:([^<]{1,80})</span>'
 )
+# Size regex for HTML: matches "4.1 GB", "400 MB", "1.2 KB" etc.
+_HTML_SIZE_RE = re.compile(r'(\d+(?:\.\d+)?)\s*(GB|MB|KB)\b', re.IGNORECASE)
 _OLLAMA_MODEL_MEDIA_TYPE = "application/vnd.ollama.image.model"
 
 # Retry settings matching download_models.py pattern
@@ -258,7 +260,7 @@ def get_model_info(model_tag: str) -> dict:
     }
 
 
-def get_model_tags(model_name: str) -> list:
+def get_model_tags(model_name: str) -> list[dict]:
     """
     Fetch all available tags (size/quant variants) for an Ollama model.
 
@@ -266,8 +268,10 @@ def get_model_tags(model_name: str) -> list:
     the browser shows. The OCI registry /v2/.../tags/list endpoint is not
     supported by registry.ollama.ai (returns 404).
 
-    Returns a list of tag name strings, e.g.:
-      ['latest', '0.6b', '1.7b', '4b', '7b', '14b', '32b', ...]
+    Returns list[dict] with keys:
+      name (str):       tag string, e.g. '7b-instruct-q4_K_M'
+      size_bytes (int): file size in bytes scraped from the page (0 if unknown)
+
     Order preserved as on the page ('latest' first, then by size/quant).
     """
     # Strip any existing tag / namespace to get the bare model name
@@ -278,16 +282,28 @@ def get_model_tags(model_name: str) -> list:
     session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120"})
     resp = session.get(url, timeout=15)
     resp.raise_for_status()
-    # Extract tags from <span class="group-hover:underline">model:tag</span>
-    tags = _TAG_PAGE_RE.findall(resp.text)
-    # Deduplicate while preserving order
+    # Split page by tag anchor spans; each block starts right after the span
+    parts = re.split(r'<span\s+class="group-hover:underline">', resp.text)
     seen: set = set()
     result = []
-    for t in tags:
-        t = t.strip()
-        if t and t not in seen:
-            seen.add(t)
-            result.append(t)
+    _multipliers = {"KB": 1024, "MB": 1024 ** 2, "GB": 1024 ** 3}
+    for part in parts[1:]:  # skip content before the first tag span
+        # Extract tag name: first match is "model:tag</span>"
+        m_tag = re.match(r'[^:<]*:?([^<]{1,80})</span>', part)
+        if not m_tag:
+            continue
+        tag = m_tag.group(1).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        # Try to extract file size from the next ~600 chars of this block
+        size_bytes = 0
+        m_size = _HTML_SIZE_RE.search(part[:600])
+        if m_size:
+            num = float(m_size.group(1))
+            unit = m_size.group(2).upper()
+            size_bytes = int(num * _multipliers.get(unit, 0))
+        result.append({"name": tag, "size_bytes": size_bytes})
     return result
 
 
