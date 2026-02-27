@@ -3605,7 +3605,7 @@ async function loadOllamaState() {
       }
     }
     // Re-render model list if already loaded
-    if (allModels.length > 0) renderModels();
+    if (allModels.length > 0) renderModels(allModels);
   } catch (_) {
     ollamaLoaded = new Set();
     if (statusEl) {
