@@ -1428,6 +1428,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Только S3: модели скачиваются во временную директорию и удаляются после выгрузки",
     )
+    # Ollama registration
+    ollama_group = p.add_argument_group("Ollama")
+    ollama_group.add_argument(
+        "--register-ollama",
+        action="store_true",
+        help=(
+            "После скачивания Ollama-модели зарегистрировать её в локальном Ollama "
+            "без копирования файлов (zero-copy через hardlink). "
+            "Требует установленного ollama на PATH."
+        ),
+    )
+    ollama_group.add_argument(
+        "--ollama-models-dir",
+        metavar="DIR",
+        help="Путь к директории $OLLAMA_MODELS (по умолчанию: ~/.ollama)",
+    )
     return p
 
 
@@ -1777,6 +1793,28 @@ def main() -> int:
                     result.local_path.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+            # Ollama registration (zero-copy via hardlink)
+            if (
+                getattr(args, "register_ollama", False)
+                and model.source == "ollama"
+                and model.ollama_model
+                and result.status in ("DOWNLOAD", "SKIP")
+                and result.local_path
+                and not args.dry_run
+            ):
+                try:
+                    import ollama_hub
+                    ollama_models_dir = (
+                        Path(args.ollama_models_dir) if args.ollama_models_dir else None
+                    )
+                    ollama_hub.register_with_ollama(
+                        result.local_path,
+                        model.ollama_model,
+                        ollama_models_dir=ollama_models_dir,
+                    )
+                except Exception as exc:
+                    print(f"  [OLLAMA] Registration failed: {exc}")
 
             results.append(result)
 

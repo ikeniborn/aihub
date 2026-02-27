@@ -12,6 +12,7 @@
 8. [Типовые сценарии](#8-типовые-сценарии)
 9. [Контроль нагрузки на канал](#9-контроль-нагрузки-на-канал)
 10. [Безопасность](#10-безопасность)
+11. [Использование скачанных Ollama-моделей](#11-использование-скачанных-ollama-моделей)
 
 ---
 
@@ -723,3 +724,83 @@ url: "http://user:secret@proxy.corp.com:3128"
 - Разрешённый диапазон: только внутри `models_dir`
 
 Попытка `../../../../etc/passwd` вернёт HTTP 400.
+
+---
+
+## 11. Использование скачанных Ollama-моделей
+
+aihub скачивает GGUF-файлы Ollama из OCI-реестра напрямую и сохраняет их на диск.
+Чтобы использовать эти файлы в `ollama`, нужно зарегистрировать их через `ollama create`.
+
+### Проблема дублирования данных
+
+По умолчанию `ollama create FROM /path/file.gguf` **копирует** GGUF в
+`$OLLAMA_MODELS/blobs/sha256-{hash}` (~46 ГБ → ~92 ГБ на диске).
+
+aihub решает эту проблему двумя способами.
+
+---
+
+### Вариант 1 — простая регистрация через `ollama create` (с копированием)
+
+Используйте этот вариант, если файлы aihub и Ollama хранятся на **разных дисках**
+или когда место не ограничено. После регистрации можно удалить оригиналы aihub.
+
+```bash
+# Зарегистрировать все GGUF из папки models/misc в Ollama
+for f in /path/to/models/misc/*.gguf; do
+    name=$(basename "$f" .gguf)
+    echo "FROM $f" | ollama create "$name" -f -
+done
+
+# Проверить, что модели появились
+ollama list
+
+# После проверки — удалить оригиналы (блобы уже в ollama/blobs/)
+# rm /path/to/models/misc/*.gguf
+```
+
+> **Примечание:** `ollama_model` в `models.yaml` имеет вид `model:tag` (например, `qwen3:7b`).
+> Для создания имени в Ollama используйте именно это значение как `$name`.
+
+---
+
+### Вариант 2 — zero-copy через `--register-ollama` (без дублирования)
+
+aihub автоматически создаёт **hardlink** (жёсткую ссылку) от скачанного GGUF
+в `$OLLAMA_MODELS/blobs/sha256-{hash}` перед вызовом `ollama create`.
+Ollama находит уже существующий блоб → только записывает манифест → **данные не копируются**.
+
+```bash
+# Скачать Ollama-модели и сразу зарегистрировать в Ollama без дублирования
+python scripts/download_models.py --register-ollama
+
+# Если $OLLAMA_MODELS не ~/.ollama — указать явно
+python scripts/download_models.py --register-ollama --ollama-models-dir /data/ollama
+
+# Зарегистрировать уже скачанные модели (без повторного скачивания)
+python scripts/download_models.py --register-ollama
+# (download пропустит уже скачанные, но регистрация выполнится для SKIP-статусов тоже)
+```
+
+**Как это работает:**
+
+1. Ollama хранит файлы по SHA256: `$OLLAMA_MODELS/blobs/sha256-{hexhash}`.
+2. aihub сохраняет SHA256 в `.etag`-сайдкаре рядом с GGUF при скачивании.
+3. `--register-ollama` читает `.etag` → создаёт hardlink с правильным именем → запускает
+   `ollama create model:tag -f Modelfile`.
+4. `ollama create` находит блоб → пишет только манифест → нет копирования.
+
+**Требования:**
+- `ollama` должен быть установлен и доступен в `PATH` (`ollama --version`).
+- Hardlink работает только если GGUF и `$OLLAMA_MODELS` на **одном разделе/диске**.
+  При разных файловых системах автоматически создаётся симлинк
+  (удаление GGUF сломает симлинк — держите файлы, пока используете модель в Ollama).
+
+**Проверка результата:**
+
+```bash
+ollama list                      # модель появится в списке
+ollama run qwen3:7b              # запустить и проверить
+du -sh ~/.ollama/blobs/          # размер не вырастет — hardlink не занимает места
+```
