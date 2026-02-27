@@ -9,6 +9,8 @@ settings:
   bandwidth_limit_mbps: null   # лимит Mbit/s для стандартного HTTP (null = без ограничений)
   s3:
     sync_after_download: false  # автоматически синхронизировать в S3 после загрузки
+  ollama:
+    host: http://localhost:11434  # Ollama server URL — для проверки зарегистрированных моделей в UI
 
 models:
   # ── HuggingFace — GGUF-модель ────────────────────────────────────────────────
