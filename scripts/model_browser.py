@@ -1155,6 +1155,11 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <span class="dl-ctrl-label" title="Автоматически загружать модели в S3 после скачивания.&#10;Требует настройки credentials.yaml (access_key_id, secret_access_key)&#10;и переменных окружения: S3_BUCKET, S3_ENDPOINT_URL, S3_REGION, S3_PREFIX.">Sync → S3:</span>
         <input type="checkbox" id="dl-sync-s3" class="dl-ctrl-checkbox">
       </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Адрес Ollama-сервера. Используется при загрузке страницы для определения уже зарегистрированных моделей.">Ollama URL:</span>
+        <input type="text" id="ol-host" class="dl-ctrl-input" style="width:11rem;text-align:left" placeholder="http://localhost:11434">
+        <span id="ol-status" style="font-size:0.72rem;color:var(--text-muted)" title="Статус подключения к Ollama"></span>
+      </div>
       <button class="dl-save-btn" id="dl-save-btn" onclick="saveSettings()" title="Сохранить параметры в models.yaml">Сохранить настройки</button>
     </div>
     <button class="btn-secondary" id="dl-start-btn" onclick="dlStart()" title="Скачать все enabled модели" style="margin-left:auto">▶ Скачать enabled</button>
@@ -2172,12 +2177,7 @@ async function registerWithOllama(m, btn) {
       throw new Error('Ошибка регистрации в Ollama: ' + (regData.error || 'HTTP ' + regResp.status));
     }
 
-    // ── Show temporary success state, then update ollamaLoaded and re-render ─
-    btn.textContent = '✓';
-    btn.style.color = 'var(--green)';
-    btn.style.borderColor = 'var(--green)';
-    btn.style.opacity = '1';
-    setTimeout(_restoreBtn, 2500);
+    // ── Update ollamaLoaded and re-render ──────────────────────────────────
     if (m.ollama_model) ollamaLoaded.add(m.ollama_model);
     await loadModels();
 
@@ -4412,12 +4412,14 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             try:
                 raw = load_yaml(self.config_path)
-                s = raw.get("settings", {})
+                s = raw.get("settings", {}) or {}
+                ollama_cfg = s.get("ollama", {}) or {}
                 self._send_json({
                     "hf_download_concurrency": s.get("hf_download_concurrency"),
                     "bandwidth_limit_mbps":    s.get("bandwidth_limit_mbps"),
                     "download_timeout_hours":  s.get("download_timeout_hours"),
-                    "sync_after_download":     s.get("s3", {}).get("sync_after_download"),
+                    "sync_after_download":     (s.get("s3") or {}).get("sync_after_download"),
+                    "ollama_host":             ollama_cfg.get("host", "http://localhost:11434"),
                 })
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
@@ -4428,6 +4430,27 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 self._send_json(models)
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
+
+        elif path == "/api/ollama/loaded":
+            # Return list of model names registered in the local Ollama daemon.
+            # Uses settings.ollama.host from models.yaml (default: localhost:11434).
+            # Called once on page load; no continuous polling.
+            try:
+                import urllib.request as _ureq
+                raw = load_yaml(self.config_path)
+                ollama_cfg = ((raw.get("settings") or {}).get("ollama") or {})
+                host = str(ollama_cfg.get("host", "http://localhost:11434")).rstrip("/")
+                req = _ureq.Request(
+                    f"{host}/api/tags",
+                    headers={"Accept": "application/json"},
+                )
+                with _ureq.urlopen(req, timeout=3) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                names = [m["name"] for m in (data.get("models") or []) if isinstance(m, dict)]
+                self._send_json({"ok": True, "models": names, "host": host})
+            except Exception as e:
+                self._send_json({"ok": False, "models": [], "error": str(e)})
+            return
 
         elif path == "/api/ollama/tags":
             qs = parse_qs(parsed.query)
