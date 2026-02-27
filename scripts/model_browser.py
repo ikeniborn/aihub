@@ -3595,9 +3595,13 @@ async function loadOllamaState() {
           ? `● ${ollamaLoaded.size} мод.`
           : '● пусто';
         statusEl.style.color = 'var(--green, #4ade80)';
+        statusEl.title = `Подключено: ${data.host}`;
       } else {
         statusEl.textContent = '✕ недоступен';
         statusEl.style.color = 'var(--red, #f87171)';
+        statusEl.title = data.error
+          ? `Ошибка: ${data.error}`
+          : 'Ollama недоступен';
       }
     }
     // Re-render model list if already loaded
@@ -4435,6 +4439,8 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             # Return list of model names registered in the local Ollama daemon.
             # Uses settings.ollama.host from models.yaml (default: localhost:11434).
             # Called once on page load; no continuous polling.
+            # Uses a proxy-free opener so system HTTP_PROXY does not intercept
+            # the localhost connection.
             try:
                 import urllib.request as _ureq
                 raw = load_yaml(self.config_path)
@@ -4444,7 +4450,10 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     f"{host}/api/tags",
                     headers={"Accept": "application/json"},
                 )
-                with _ureq.urlopen(req, timeout=3) as resp:
+                # Bypass system proxy (HTTP_PROXY / HTTPS_PROXY env vars) for
+                # local Ollama daemon so the connection is always direct.
+                _opener = _ureq.build_opener(_ureq.ProxyHandler({}))
+                with _opener.open(req, timeout=5) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                 names = [m["name"] for m in (data.get("models") or []) if isinstance(m, dict)]
                 self._send_json({"ok": True, "models": names, "host": host})
