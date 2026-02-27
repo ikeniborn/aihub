@@ -1682,6 +1682,28 @@ function renderModelRow(m, i) {
     }
   }
 
+  // ── Ollama registration button ──────────────────────────────────────────────
+  if (isOllama && (m.downloaded || m.s3_available)) {
+    const btnOllama = document.createElement('button');
+    btnOllama.className = 'btn-ollama-reg';
+    const isRegistered = m.ollama_model && ollamaLoaded.has(m.ollama_model);
+    if (isRegistered) {
+      btnOllama.textContent = '✓Ollama';
+      btnOllama.title = 'Модель уже зарегистрирована в Ollama';
+      btnOllama.style.opacity = '0.5';
+      btnOllama.style.cursor = 'default';
+      btnOllama.disabled = true;
+    } else if (m.downloaded) {
+      btnOllama.textContent = '→Ollama';
+      btnOllama.title = 'Зарегистрировать модель в Ollama (`ollama create FROM`)';
+    } else {
+      btnOllama.textContent = '↓→Ollama';
+      btnOllama.title = 'Скачать из S3 локально, затем зарегистрировать в Ollama';
+    }
+    if (!isRegistered) btnOllama.onclick = () => registerWithOllama(m, btnOllama);
+    tdActions.append(' ', btnOllama);
+  }
+
   tdActions.append(btnEdit, ' ', btnDel);
 
   tr.append(tdCb, tdStatus, tdName, tdTags, tdSize, tdDesc, tdActions);
@@ -2083,6 +2105,89 @@ async function downloadFromS3(m) {
 }
 
 /**
+ * Register a locally downloaded Ollama GGUF with the local Ollama daemon.
+ * Calls POST /api/ollama/register which runs `ollama create FROM <path>` server-side.
+ * If the model is only in S3 (not downloaded locally), first triggers S3 download,
+ * waits for it to complete, then registers.
+ */
+async function registerWithOllama(m, btn) {
+  const label = `${m.ollama_model || m.filename} (${m.repo_id})`;
+  const needsS3 = !m.downloaded && m.s3_available;
+  const confirmMsg = needsS3
+    ? `Модель не скачана локально.\n\nСначала будет выполнено скачивание из S3,\nзатем регистрация в Ollama.\n\n${label}`
+    : `Зарегистрировать модель в Ollama?\n\n${label}`;
+  if (!confirm(confirmMsg)) return;
+
+  const origText = btn.textContent;
+  btn.disabled = true;
+
+  const _restoreBtn = () => {
+    btn.textContent = origText;
+    btn.style.color = '';
+    btn.style.borderColor = '';
+    btn.style.opacity = '';
+    btn.disabled = false;
+  };
+
+  try {
+    // ── Step 1 (S3-only): download to local storage first ──────────────────
+    if (needsS3) {
+      btn.textContent = '↓S3…';
+      const s3Resp = await fetch('/api/s3/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+      });
+      const s3Data = await s3Resp.json();
+      if (!s3Resp.ok) {
+        throw new Error('Ошибка запуска скачивания из S3: ' + (s3Data.error || 'HTTP ' + s3Resp.status));
+      }
+
+      // Poll S3 download status until done
+      btn.textContent = '↓…';
+      await new Promise((resolve, reject) => {
+        let polls = 0;
+        const iv = setInterval(async () => {
+          polls++;
+          if (polls > 1800) { clearInterval(iv); reject(new Error('Таймаут ожидания S3')); return; }
+          try {
+            const qs = `repo_id=${encodeURIComponent(m.repo_id)}&filename=${encodeURIComponent(m.filename)}`;
+            const sr = await fetch('/api/s3/status?' + qs);
+            if (!sr.ok) { clearInterval(iv); reject(new Error('Ошибка статуса S3')); return; }
+            const sd = await sr.json();
+            if (sd.status === 'done') { clearInterval(iv); resolve(); }
+            else if (sd.status === 'error') { clearInterval(iv); reject(new Error(sd.error || 'Ошибка S3')); }
+          } catch (e) { clearInterval(iv); reject(e); }
+        }, 2000);
+      });
+
+      // Refresh model list so the updated local_path is available
+      await loadModels();
+    }
+
+    // ── Step 2: register with Ollama ───────────────────────────────────────
+    btn.textContent = '→O…';
+    const regResp = await fetch('/api/ollama/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+    });
+    const regData = await regResp.json();
+    if (!regResp.ok) {
+      throw new Error('Ошибка регистрации в Ollama: ' + (regData.error || 'HTTP ' + regResp.status));
+    }
+
+    // ── Update ollamaLoaded and re-render ──────────────────────────────────
+    if (m.ollama_model) ollamaLoaded.add(m.ollama_model);
+    await loadModels();
+
+  } catch (e) {
+    alert('Ошибка: ' + e.message);
+    _restoreBtn();
+  }
+}
+
+/**
  * Poll /api/s3/status every 2s until the operation is done or error.
  * Refreshes model list on completion so UI reflects the new state.
  * Mitigation R6: provides progress feedback via spinner (shown during running status).
@@ -2226,6 +2331,7 @@ function toggleLangChip(chip) {
 
 let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
+let ollamaLoaded = new Set(); // ollama_model names already registered in Ollama daemon
 
 function onSourceChange() {
   const source = document.getElementById('hf-source').value;
@@ -3616,6 +3722,7 @@ async function dlCancel() {
 // Init
 loadModels();
 loadSettings();
+loadOllamaState();
 checkRunningDownload();
 
 // Resume download panel if a download is already running (e.g. after page refresh).
@@ -3633,6 +3740,34 @@ async function checkRunningDownload() {
   } catch (_) {}
 }
 
+async function loadOllamaState() {
+  const statusEl = document.getElementById('ol-status');
+  try {
+    const resp = await fetch('/api/ollama/loaded');
+    const data = await resp.json();
+    ollamaLoaded = new Set(data.models || []);
+    if (statusEl) {
+      if (data.ok) {
+        statusEl.textContent = ollamaLoaded.size > 0
+          ? `● ${ollamaLoaded.size} мод.`
+          : '● пусто';
+        statusEl.style.color = 'var(--green, #4ade80)';
+      } else {
+        statusEl.textContent = '✕ недоступен';
+        statusEl.style.color = 'var(--red, #f87171)';
+      }
+    }
+    // Re-render model list if already loaded
+    if (allModels.length > 0) renderModels();
+  } catch (_) {
+    ollamaLoaded = new Set();
+    if (statusEl) {
+      statusEl.textContent = '✕ недоступен';
+      statusEl.style.color = 'var(--red, #f87171)';
+    }
+  }
+}
+
 async function loadSettings() {
   try {
     const resp = await fetch('/api/settings');
@@ -3646,6 +3781,10 @@ async function loadSettings() {
       document.getElementById('dl-bandwidth').value = s.bandwidth_limit_mbps;
     if (s.sync_after_download != null)
       document.getElementById('dl-sync-s3').checked = s.sync_after_download;
+    if (s.ollama_host) {
+      const olHostEl = document.getElementById('ol-host');
+      if (olHostEl) olHostEl.value = s.ollama_host;
+    }
   } catch (_) {}
 }
 
@@ -3659,11 +3798,15 @@ async function saveSettings() {
   const syncS3  = document.getElementById('dl-sync-s3').checked;
 
   // null means "remove from yaml" (no limit); 0 for timeout means disabled
+  const olHostEl = document.getElementById('ol-host');
+  const olHostVal = olHostEl ? olHostEl.value.trim() : '';
+
   const body = {
     hf_download_concurrency: (concRaw > 0)                    ? concRaw : null,
     download_timeout_hours:  (!isNaN(toRaw) && toRaw >= 0)    ? toRaw   : null,
     bandwidth_limit_mbps:    (!isNaN(bwRaw) && bwRaw > 0)     ? bwRaw   : null,
     sync_after_download:     syncS3,
+    ollama_host:             olHostVal || null,
   };
 
   try {
@@ -4751,6 +4894,18 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 if "sync_after_download" in params:
                     s3_sec = s.setdefault("s3", {})
                     s3_sec["sync_after_download"] = bool(params["sync_after_download"])
+                # ollama_host: string — сохраняется в settings.ollama.host
+                if "ollama_host" in params:
+                    v = str(params["ollama_host"]).strip()
+                    if v:
+                        s.setdefault("ollama", {})["host"] = v
+                    else:
+                        ollama_sec = s.get("ollama") or {}
+                        ollama_sec.pop("host", None)
+                        if not ollama_sec:
+                            s.pop("ollama", None)
+                        else:
+                            s["ollama"] = ollama_sec
                 _atomic_yaml_write(self.config_path, raw)
                 self._send_json({"status": "ok"})
             except (ValueError, TypeError) as e:
