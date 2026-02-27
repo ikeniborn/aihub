@@ -2460,8 +2460,9 @@ function _updateOllamaTableHead(isOllama) {
 async function autoExpandAllOllamaModels(results) {
   const ollamaResults = results.filter(r => r.source === 'ollama');
   await Promise.all(ollamaResults.map(r => _autoExpandOllamaModel(r)));
-  _rebuildVariantTagChips();
+  // Apply pre-filter first so chips are built only from visible rows
   applyOllamaVariantFilter();
+  _rebuildVariantTagChips();
 }
 
 async function _autoExpandOllamaModel(r) {
@@ -2504,6 +2505,8 @@ async function _autoExpandOllamaModel(r) {
     } else if (placeholder) {
       placeholder.remove();
     }
+    // Apply pre-filter immediately — don't wait for all models to finish loading
+    applyOllamaVariantFilter();
   } catch (_e) {
     if (placeholder) {
       const td = placeholder.querySelector('td');
@@ -3026,9 +3029,10 @@ function _rebuildVariantTagChips() {
   const chips = document.getElementById('ollama-vtag-chips');
   if (!group || !chips) return;
 
-  // Collect all unique vtags across all visible variant rows
+  // Collect unique vtags only from rows visible after pre-filter
   const tagCount = new Map();
   document.querySelectorAll('#hf-results-body .ollama-variant-row').forEach(tr => {
+    if (tr.style.display === 'none') return;
     const vtags = JSON.parse(tr.dataset.vtags || '[]');
     const seen = new Set();
     vtags.forEach(t => {
