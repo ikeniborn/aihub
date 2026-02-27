@@ -149,7 +149,7 @@ python scripts/download_models.py --force --model DeepSeek-R1
 ### Запуск
 
 ```bash
-make ui                        # http://localhost:9000, открывает браузер автоматически
+make ui                        # http://localhost:9009, открывает браузер автоматически
 make ui PORT=9001              # другой порт
 make ui HOST=0.0.0.0           # доступ из локальной сети
 make ui CONFIG=custom.yaml     # другой конфиг
@@ -551,7 +551,7 @@ python scripts/download_models.py --model Phi-4
 ### Управлять набором через браузер
 
 ```bash
-make ui   # открывает http://localhost:9000 в браузере автоматически
+make ui   # открывает http://localhost:9009 в браузере автоматически
 # Вкладка «Мои модели»: включить/отключить чекбоксы → Сохранить
 # Вкладка «Поиск HuggingFace»: найти новые → выбрать → добавить в models.yaml
 # Вкладка «Поиск Ollama»: найти модель → выбрать вариант → добавить в models.yaml

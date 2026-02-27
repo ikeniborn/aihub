@@ -21,9 +21,9 @@ list:
 	$(VENV_PYTHON) scripts/download_models.py --list
 
 ## ui — запустить веб-интерфейс и открыть браузер
-##      PORT=9000  HOST=127.0.0.1  CONFIG=models.yaml
+##      PORT=9009  HOST=127.0.0.1  CONFIG=models.yaml
 ##      Пример: make ui PORT=9001
-PORT   ?= 9000
+PORT   ?= 9009
 HOST   ?= 127.0.0.1
 CONFIG ?= models.yaml
 

@@ -19,7 +19,7 @@ Generated: 2026-02-20 | Version: 1.0.0
 graph TD
     subgraph presentation["Presentation Layer"]
         DL["download_models.py\nModel Downloader"]
-        MB["model_browser.py\nWeb UI (port 9000)"]
+        MB["model_browser.py\nWeb UI (port 9009)"]
     end
 
     subgraph business["Business Layer"]
@@ -80,7 +80,7 @@ Two CLI/web entry points, each callable via Makefile:
 | Script | Makefile | Purpose |
 |--------|----------|---------|
 | `scripts/download_models.py` | `make download`, `make list` | Download AI models to local disk and/or S3 |
-| `scripts/model_browser.py` | `make ui` | Web UI at http://localhost:9000 |
+| `scripts/model_browser.py` | `make ui` | Web UI at http://localhost:9009 |
 
 ### Business Layer
 - `scripts/utils.py` — `fmt_size()` and `load_hf_token()` shared utilities
