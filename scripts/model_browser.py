@@ -60,6 +60,14 @@ except ImportError:
     _ollama_hub = None  # type: ignore[assignment]
     _OLLAMA_AVAILABLE = False
 
+# Inference servers (llama.cpp / vLLM) — optional, only stdlib inside
+try:
+    import inference_servers as _inference_servers
+    _INFERENCE_SERVERS_AVAILABLE = True
+except ImportError:
+    _inference_servers = None  # type: ignore[assignment]
+    _INFERENCE_SERVERS_AVAILABLE = False
+
 
 # ─── S3 Config (minimal, for delete operations) ────────────────────────────────
 
@@ -784,6 +792,22 @@ HTML_PAGE = r"""<!DOCTYPE html>
   }
   .btn-ollama-reg:hover:not(:disabled) { opacity: 1; background: #2e1065; }
   .btn-ollama-reg:disabled { opacity: 0.3; cursor: not-allowed; }
+  /* llama.cpp — оранжевый */
+  .btn-llamacpp-serve {
+    background: none; border: 1px solid #9a3412; border-radius: 4px;
+    color: #fdba74; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-llamacpp-serve:hover:not(:disabled) { opacity: 1; background: #431407; }
+  .btn-llamacpp-serve:disabled { opacity: 0.3; cursor: not-allowed; }
+  /* vLLM — голубой */
+  .btn-vllm-serve {
+    background: none; border: 1px solid #0f766e; border-radius: 4px;
+    color: #5eead4; padding: 2px 7px; font-size: 0.75rem; cursor: pointer;
+    white-space: nowrap; opacity: 0.6; transition: opacity 0.15s, background 0.15s;
+  }
+  .btn-vllm-serve:hover:not(:disabled) { opacity: 1; background: #042f2e; }
+  .btn-vllm-serve:disabled { opacity: 0.3; cursor: not-allowed; }
   .s3-op-spinner {
     display: inline-block; width: 10px; height: 10px;
     border: 2px solid rgba(255,255,255,0.2); border-top-color: #38bdf8;
@@ -1159,6 +1183,20 @@ HTML_PAGE = r"""<!DOCTYPE html>
         <span class="dl-ctrl-label" title="Адрес Ollama-сервера. Используется при загрузке страницы для определения уже зарегистрированных моделей.">Ollama URL:</span>
         <input type="text" id="ol-host" class="dl-ctrl-input" style="width:11rem;text-align:left" placeholder="http://localhost:11434">
         <span id="ol-status" style="font-size:0.72rem;color:var(--text-muted)" title="Статус подключения к Ollama"></span>
+      </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Адрес llama-server. Показывает загруженную модель.">llama.cpp URL:</span>
+        <input type="text" id="llamacpp-host" class="dl-ctrl-input"
+               style="width:11rem;text-align:left" placeholder="http://localhost:8080">
+        <span id="llamacpp-status" style="font-size:0.72rem;color:var(--text-muted)"
+              title="Статус подключения к llama.cpp"></span>
+      </div>
+      <div class="dl-ctrl-group">
+        <span class="dl-ctrl-label" title="Адрес vLLM-сервера. Показывает загруженные модели.">vLLM URL:</span>
+        <input type="text" id="vllm-host" class="dl-ctrl-input"
+               style="width:11rem;text-align:left" placeholder="http://localhost:8000">
+        <span id="vllm-status" style="font-size:0.72rem;color:var(--text-muted)"
+              title="Статус подключения к vLLM"></span>
       </div>
       <button class="dl-save-btn" id="dl-save-btn" onclick="saveSettings()" title="Сохранить параметры в models.yaml">Сохранить настройки</button>
     </div>
@@ -1683,10 +1721,13 @@ function renderModelRow(m, i) {
   }
 
   // ── Ollama registration button ──────────────────────────────────────────────
-  if (isOllama && (m.downloaded || m.s3_available)) {
+  // Show for Ollama-source models AND for HuggingFace GGUF files
+  const isGguf = m.filename && m.filename.toLowerCase().endsWith('.gguf');
+  if ((isOllama || isGguf) && (m.downloaded || m.s3_available)) {
     const btnOllama = document.createElement('button');
     btnOllama.className = 'btn-ollama-reg';
-    const isRegistered = m.ollama_model && ollamaLoaded.has(m.ollama_model);
+    // Track registered state only for Ollama-source models (they have ollama_model field)
+    const isRegistered = isOllama && m.ollama_model && ollamaLoaded.has(m.ollama_model);
     if (isRegistered) {
       btnOllama.textContent = '✓Ollama';
       btnOllama.title = 'Модель уже зарегистрирована в Ollama';
@@ -1702,6 +1743,43 @@ function renderModelRow(m, i) {
     }
     if (!isRegistered) btnOllama.onclick = () => registerWithOllama(m, btnOllama);
     tdActions.append(' ', btnOllama);
+  }
+
+  // ── llama.cpp: только для скачанных GGUF ──────────────────────────────────
+  if (isGguf && m.downloaded) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-llamacpp-serve';
+    const stem = m.filename.replace(/\.gguf$/i, '');
+    const isLoaded = [...llamacppLoaded].some(id =>
+      id.includes(stem) || stem.includes(id));
+    if (isLoaded) {
+      btn.textContent = '●llama'; btn.disabled = true;
+      btn.title = 'Уже загружена в llama.cpp';
+      btn.style.opacity = '0.5';
+    } else {
+      btn.textContent = '→llama';
+      btn.title = 'Показать команду запуска llama-server';
+      btn.onclick = () => showServeCommand(m, 'llamacpp');
+    }
+    tdActions.append(' ', btn);
+  }
+
+  // ── vLLM: для всех скачанных моделей ────────────────────────────────────
+  if (m.downloaded) {
+    const btn = document.createElement('button');
+    btn.className = 'btn-vllm-serve';
+    const base = (m.repo_id || '').split('/').pop() || '';
+    const isLoaded = [...vllmLoaded].some(id =>
+      id === m.repo_id || id.includes(base) || base.includes(id));
+    if (isLoaded) {
+      btn.textContent = '●vLLM'; btn.disabled = true;
+      btn.title = 'Уже загружена в vLLM'; btn.style.opacity = '0.5';
+    } else {
+      btn.textContent = '→vLLM';
+      btn.title = 'Показать команду запуска vllm serve';
+      btn.onclick = () => showServeCommand(m, 'vllm');
+    }
+    tdActions.append(' ', btn);
   }
 
   tdActions.append(btnEdit, ' ', btnDel);
@@ -2111,11 +2189,33 @@ async function downloadFromS3(m) {
  * waits for it to complete, then registers.
  */
 async function registerWithOllama(m, btn) {
-  const label = `${m.ollama_model || m.filename} (${m.repo_id})`;
+  const isOllamaSource = m.source === 'ollama';
+
+  // Determine Ollama model name: use ollama_model if set, otherwise prompt user
+  let ollamaName = m.ollama_model || '';
+  if (!ollamaName) {
+    // Derive a sensible default: strip .gguf, lowercase, sanitise chars
+    const suggested = m.filename
+      .replace(/\.gguf$/i, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '') + ':latest';
+    ollamaName = prompt(
+      `Имя модели для Ollama (model:tag или user/model:tag):\n\n` +
+      `Файл: ${m.filename}\nРепозиторий: ${m.repo_id}`,
+      suggested
+    );
+    if (ollamaName === null) return;  // user cancelled
+    ollamaName = ollamaName.trim();
+    if (!ollamaName) return;
+  }
+
+  const label = `${ollamaName || m.filename} (${m.repo_id})`;
   const needsS3 = !m.downloaded && m.s3_available;
   const confirmMsg = needsS3
-    ? `Модель не скачана локально.\n\nСначала будет выполнено скачивание из S3,\nзатем регистрация в Ollama.\n\n${label}`
-    : `Зарегистрировать модель в Ollama?\n\n${label}`;
+    ? `Модель не скачана локально.\n\nСначала будет выполнено скачивание из S3,\nзатем регистрация в Ollama как '${ollamaName}'.\n\n${label}`
+    : `Зарегистрировать модель в Ollama как '${ollamaName}'?\n\n${label}`;
   if (!confirm(confirmMsg)) return;
 
   const origText = btn.textContent;
@@ -2170,7 +2270,7 @@ async function registerWithOllama(m, btn) {
     const regResp = await fetch('/api/ollama/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename }),
+      body: JSON.stringify({ repo_id: m.repo_id, filename: m.filename, ollama_name: ollamaName }),
     });
     const regData = await regResp.json();
     if (!regResp.ok) {
@@ -2178,7 +2278,8 @@ async function registerWithOllama(m, btn) {
     }
 
     // ── Update ollamaLoaded and re-render ──────────────────────────────────
-    if (m.ollama_model) ollamaLoaded.add(m.ollama_model);
+    const registeredName = regData.ollama_model || ollamaName;
+    if (registeredName) ollamaLoaded.add(registeredName);
     await loadModels();
 
   } catch (e) {
@@ -2332,6 +2433,8 @@ function toggleLangChip(chip) {
 let hfResults = [];
 let hfSelected = new Map(); // "repo_id||filename" → {repo_id, filename, gated, tags, description, pipeline_tag}
 let ollamaLoaded = new Set(); // ollama_model names already registered in Ollama daemon
+let llamacppLoaded = new Set(); // model IDs loaded in llama-server
+let vllmLoaded = new Set();     // model IDs loaded in vLLM
 
 function onSourceChange() {
   const source = document.getElementById('hf-source').value;
@@ -3566,6 +3669,8 @@ async function dlCancel() {
 loadModels();
 loadSettings();
 loadOllamaState();
+loadLlamacppState();
+loadVllmState();
 checkRunningDownload();
 
 // Resume download panel if a download is already running (e.g. after page refresh).
@@ -3615,6 +3720,83 @@ async function loadOllamaState() {
   }
 }
 
+async function loadLlamacppState() {
+  const statusEl = document.getElementById('llamacpp-status');
+  try {
+    const resp = await fetch('/api/llamacpp/loaded');
+    const data = await resp.json();
+    llamacppLoaded = new Set(data.models || []);
+    if (statusEl) {
+      if (data.ok) {
+        statusEl.textContent = llamacppLoaded.size > 0
+          ? `● ${llamacppLoaded.size} загр.`
+          : '● не загружено';
+        statusEl.style.color = 'var(--green, #4ade80)';
+        statusEl.title = `Подключено: ${data.host}`;
+      } else {
+        statusEl.textContent = '✕ недоступен';
+        statusEl.style.color = 'var(--red, #f87171)';
+        statusEl.title = data.error
+          ? `Ошибка: ${data.error}`
+          : 'llama.cpp недоступен';
+      }
+    }
+    if (allModels.length > 0) renderModels(allModels);
+  } catch (_) {
+    llamacppLoaded = new Set();
+    if (statusEl) {
+      statusEl.textContent = '✕ недоступен';
+      statusEl.style.color = 'var(--red, #f87171)';
+    }
+  }
+}
+
+async function loadVllmState() {
+  const statusEl = document.getElementById('vllm-status');
+  try {
+    const resp = await fetch('/api/vllm/loaded');
+    const data = await resp.json();
+    vllmLoaded = new Set(data.models || []);
+    if (statusEl) {
+      if (data.ok) {
+        statusEl.textContent = vllmLoaded.size > 0
+          ? `● ${vllmLoaded.size} загр.`
+          : '● не загружено';
+        statusEl.style.color = 'var(--green, #4ade80)';
+        statusEl.title = `Подключено: ${data.host}`;
+      } else {
+        statusEl.textContent = '✕ недоступен';
+        statusEl.style.color = 'var(--red, #f87171)';
+        statusEl.title = data.error
+          ? `Ошибка: ${data.error}`
+          : 'vLLM недоступен';
+      }
+    }
+    if (allModels.length > 0) renderModels(allModels);
+  } catch (_) {
+    vllmLoaded = new Set();
+    if (statusEl) {
+      statusEl.textContent = '✕ недоступен';
+      statusEl.style.color = 'var(--red, #f87171)';
+    }
+  }
+}
+
+async function showServeCommand(m, serverType) {
+  const qs = `repo_id=${encodeURIComponent(m.repo_id)}&filename=${encodeURIComponent(m.filename)}`;
+  const ep = serverType === 'llamacpp'
+    ? '/api/llamacpp/serve-command'
+    : '/api/vllm/serve-command';
+  try {
+    const data = await fetch(`${ep}?${qs}`).then(r => r.json());
+    if (data.command) {
+      prompt(`Команда для запуска (${serverType === 'llamacpp' ? 'llama.cpp' : 'vLLM'}):`, data.command);
+    } else {
+      alert(`Не удалось сгенерировать команду: ${data.error || 'unknown'}`);
+    }
+  } catch (e) { alert(`Ошибка: ${e.message}`); }
+}
+
 async function loadSettings() {
   try {
     const resp = await fetch('/api/settings');
@@ -3631,6 +3813,14 @@ async function loadSettings() {
     if (s.ollama_host) {
       const olHostEl = document.getElementById('ol-host');
       if (olHostEl) olHostEl.value = s.ollama_host;
+    }
+    if (s.llamacpp_host) {
+      const el = document.getElementById('llamacpp-host');
+      if (el) el.value = s.llamacpp_host;
+    }
+    if (s.vllm_host) {
+      const el = document.getElementById('vllm-host');
+      if (el) el.value = s.vllm_host;
     }
   } catch (_) {}
 }
@@ -3654,6 +3844,8 @@ async function saveSettings() {
     bandwidth_limit_mbps:    (!isNaN(bwRaw) && bwRaw > 0)     ? bwRaw   : null,
     sync_after_download:     syncS3,
     ollama_host:             olHostVal || null,
+    llamacpp_host:           (document.getElementById('llamacpp-host')?.value?.trim()) || null,
+    vllm_host:               (document.getElementById('vllm-host')?.value?.trim())     || null,
   };
 
   try {
@@ -4424,6 +4616,8 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     "download_timeout_hours":  s.get("download_timeout_hours"),
                     "sync_after_download":     (s.get("s3") or {}).get("sync_after_download"),
                     "ollama_host":             ollama_cfg.get("host", "http://localhost:11434"),
+                    "llamacpp_host":           ((s.get("llamacpp") or {}).get("host", "http://localhost:8080")),
+                    "vllm_host":               ((s.get("vllm") or {}).get("host", "http://localhost:8000")),
                 })
             except Exception as e:
                 self._send_json({"error": str(e)}, status=500)
@@ -4459,6 +4653,119 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "models": names, "host": host})
             except Exception as e:
                 self._send_json({"ok": False, "models": [], "error": str(e)})
+            return
+
+        elif path == "/api/llamacpp/loaded":
+            try:
+                raw = load_yaml(self.config_path)
+                host = str(
+                    ((raw.get("settings") or {}).get("llamacpp") or {})
+                    .get("host", "http://localhost:8080")
+                ).rstrip("/")
+                if not _INFERENCE_SERVERS_AVAILABLE:
+                    self._send_json({"ok": False, "models": [], "error": "inference_servers unavailable"})
+                    return
+                self._send_json(_inference_servers.get_server_status(host, "llamacpp"))
+            except Exception as e:
+                self._send_json({"ok": False, "models": [], "error": str(e)})
+            return
+
+        elif path == "/api/vllm/loaded":
+            try:
+                raw = load_yaml(self.config_path)
+                host = str(
+                    ((raw.get("settings") or {}).get("vllm") or {})
+                    .get("host", "http://localhost:8000")
+                ).rstrip("/")
+                if not _INFERENCE_SERVERS_AVAILABLE:
+                    self._send_json({"ok": False, "models": [], "error": "inference_servers unavailable"})
+                    return
+                self._send_json(_inference_servers.get_server_status(host, "vllm"))
+            except Exception as e:
+                self._send_json({"ok": False, "models": [], "error": str(e)})
+            return
+
+        elif path == "/api/llamacpp/serve-command":
+            qs = parse_qs(parsed.query)
+            repo_id  = (qs.get("repo_id",  [None])[0] or "").strip()
+            filename = (qs.get("filename", [None])[0] or "").strip()
+            if not repo_id or not filename:
+                self._send_json({"error": "repo_id and filename are required"})
+                return
+            try:
+                raw = load_yaml(self.config_path)
+                settings_cfg = raw.get("settings", {}) or {}
+                models_dir = Path(settings_cfg.get("models_dir", "./models"))
+                if not models_dir.is_absolute():
+                    models_dir = self.config_path.parent / models_dir
+                models_dir = models_dir.resolve()
+                # Найти запись модели
+                target = None
+                for item in raw.get("models", []) or []:
+                    if (isinstance(item, dict)
+                            and item.get("repo_id") == repo_id
+                            and item.get("filename") == filename):
+                        target = item
+                        break
+                if target is None:
+                    self._send_json({"error": f"Модель не найдена: {repo_id}::{filename}"})
+                    return
+                dest_dir = target.get("dest_dir", "misc")
+                local_path = str(models_dir / dest_dir / filename)
+                host = str(
+                    ((settings_cfg.get("llamacpp") or {}).get("host", "http://localhost:8080"))
+                )
+                if not _INFERENCE_SERVERS_AVAILABLE:
+                    self._send_json({"error": "inference_servers unavailable"})
+                    return
+                cmd = _inference_servers.generate_serve_command(local_path, "llamacpp", host)
+                self._send_json({"command": cmd})
+            except Exception as e:
+                self._send_json({"error": str(e)})
+            return
+
+        elif path == "/api/vllm/serve-command":
+            qs = parse_qs(parsed.query)
+            repo_id  = (qs.get("repo_id",  [None])[0] or "").strip()
+            filename = (qs.get("filename", [None])[0] or "").strip()
+            if not repo_id or not filename:
+                self._send_json({"error": "repo_id and filename are required"})
+                return
+            try:
+                raw = load_yaml(self.config_path)
+                settings_cfg = raw.get("settings", {}) or {}
+                models_dir = Path(settings_cfg.get("models_dir", "./models"))
+                if not models_dir.is_absolute():
+                    models_dir = self.config_path.parent / models_dir
+                models_dir = models_dir.resolve()
+                # Найти запись модели
+                target = None
+                for item in raw.get("models", []) or []:
+                    if (isinstance(item, dict)
+                            and item.get("repo_id") == repo_id
+                            and item.get("filename") == filename):
+                        target = item
+                        break
+                if target is None:
+                    self._send_json({"error": f"Модель не найдена: {repo_id}::{filename}"})
+                    return
+                dest_dir = target.get("dest_dir", "misc")
+                # Для vLLM путь — директория (если не GGUF), иначе файл
+                is_gguf = filename.lower().endswith(".gguf")
+                if is_gguf:
+                    local_path = str(models_dir / dest_dir / filename)
+                else:
+                    local_path = str(models_dir / dest_dir)
+                host = str(
+                    ((settings_cfg.get("vllm") or {}).get("host", "http://localhost:8000"))
+                )
+                if not _INFERENCE_SERVERS_AVAILABLE:
+                    self._send_json({"error": "inference_servers unavailable"})
+                    return
+                cmd = _inference_servers.generate_serve_command(local_path, "vllm", host)
+                self._send_json({"command": cmd})
+            except Exception as e:
+                self._send_json({"error": str(e)})
             return
 
         elif path == "/api/ollama/tags":
@@ -4781,6 +5088,30 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                             s.pop("ollama", None)
                         else:
                             s["ollama"] = ollama_sec
+                # llamacpp_host: string — сохраняется в settings.llamacpp.host
+                if "llamacpp_host" in params:
+                    v = str(params["llamacpp_host"]).strip()
+                    if v:
+                        s.setdefault("llamacpp", {})["host"] = v
+                    else:
+                        sec = s.get("llamacpp") or {}
+                        sec.pop("host", None)
+                        if not sec:
+                            s.pop("llamacpp", None)
+                        else:
+                            s["llamacpp"] = sec
+                # vllm_host: string — сохраняется в settings.vllm.host
+                if "vllm_host" in params:
+                    v = str(params["vllm_host"]).strip()
+                    if v:
+                        s.setdefault("vllm", {})["host"] = v
+                    else:
+                        sec = s.get("vllm") or {}
+                        sec.pop("host", None)
+                        if not sec:
+                            s.pop("vllm", None)
+                        else:
+                            s["vllm"] = sec
                 _atomic_yaml_write(self.config_path, raw)
                 self._send_json({"status": "ok"})
             except (ValueError, TypeError) as e:
@@ -4940,16 +5271,20 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             try:
                 repo_id = str(payload.get("repo_id", "")).strip()
                 filename = str(payload.get("filename", "")).strip()
+                ollama_name_req = str(payload.get("ollama_name", "") or "").strip()
                 if not repo_id or not filename:
                     raise ValueError("repo_id и filename обязательны")
                 if Path(filename).name != filename:
                     raise ValueError(f"Недопустимое имя файла: '{filename}'")
-                if not repo_id.startswith("ollama/"):
-                    raise ValueError(f"Только Ollama-модели поддерживаются (ожидается repo_id вида 'ollama/...'): '{repo_id}'")
+                if ollama_name_req and not _OLLAMA_TAG_RE.match(ollama_name_req):
+                    raise ValueError(
+                        f"Недопустимое имя Ollama модели: '{ollama_name_req}'. "
+                        "Ожидается формат: model, model:tag или user/model:tag"
+                    )
                 if not _OLLAMA_AVAILABLE:
                     raise RuntimeError("ollama_hub недоступен — проверьте установку зависимостей")
 
-                # Locate model entry to get dest_dir and ollama_model
+                # Locate model entry to get dest_dir, source and ollama_model
                 raw = load_yaml(self.config_path)
                 settings = raw.get("settings", {}) or {}
                 models_dir = Path(settings.get("models_dir", "./models"))
@@ -4966,14 +5301,28 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                 if target_item is None:
                     self._send_json({"error": f"Запись не найдена: {repo_id}::{filename}"}, status=404)
                     return
-                if target_item.get("source") != "ollama":
-                    self._send_json({"error": "Поддерживаются только Ollama-модели"}, status=400)
+
+                source = str(target_item.get("source", "huggingface") or "huggingface")
+
+                # Validate: only GGUF files can be registered with Ollama
+                if not filename.lower().endswith(".gguf"):
+                    self._send_json({"error": "Ollama поддерживает только GGUF файлы"}, status=400)
                     return
 
-                ollama_model = target_item.get("ollama_model")
-                if not ollama_model:
-                    self._send_json({"error": "Поле 'ollama_model' отсутствует в записи"}, status=400)
-                    return
+                # Determine ollama model name:
+                # 1. Explicit name from request body (user provided via prompt)
+                # 2. ollama_model field in YAML (Ollama-source entries)
+                # 3. Auto-derived from filename (HuggingFace entries)
+                if ollama_name_req:
+                    ollama_model = ollama_name_req
+                elif source == "ollama" and target_item.get("ollama_model"):
+                    ollama_model = str(target_item.get("ollama_model"))
+                else:
+                    # Derive from filename: strip .gguf, lowercase, sanitise
+                    stem = Path(filename).stem
+                    name = re.sub(r"[^a-zA-Z0-9._-]", "-", stem).lower()
+                    name = re.sub(r"-+", "-", name).strip("-")
+                    ollama_model = f"{name}:latest"
 
                 dest_dir = target_item.get("dest_dir", "misc") or "misc"
                 local_file = models_dir / dest_dir / filename

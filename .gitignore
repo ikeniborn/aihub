@@ -41,3 +41,8 @@ dist/
 build/
 .venv/
 venv/
+.claude/tools/
+
+# PII proxy audit logs (auto-added by iclaude PII proxy)
+.claude/pii/
+.claude/.current-session

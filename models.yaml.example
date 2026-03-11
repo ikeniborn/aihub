@@ -11,6 +11,10 @@ settings:
     sync_after_download: false  # автоматически синхронизировать в S3 после загрузки
   ollama:
     host: http://localhost:11434  # Ollama server URL — для проверки зарегистрированных моделей в UI
+  llamacpp:
+    host: http://localhost:8080   # llama-server URL — для показа загруженной модели в UI
+  vllm:
+    host: http://localhost:8000   # vLLM server URL — для показа загруженных моделей в UI
 
 models:
   # ── HuggingFace — GGUF-модель ────────────────────────────────────────────────
