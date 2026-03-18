@@ -426,6 +426,15 @@ _s3_op_lock: threading.Lock = threading.Lock()
 _s3_ops: dict = {}  # dict[(repo_id, filename), dict]
 _S3_OP_TTL: int = 120  # seconds before done/error entries are expired from _s3_ops
 
+# ─── Per-Model Ollama Registration State ──────────────────────────────────────
+# Tracks background `ollama create` operations triggered from UI.
+# Key: (repo_id, filename)  — unique per model file.
+# Value: {"status": "running"|"done"|"error", "ollama_model": str, "error": str|None,
+#          "completed_at": float}
+_ollama_reg_lock: threading.Lock = threading.Lock()
+_ollama_reg_ops: dict = {}  # dict[(repo_id, filename), dict]
+_OLLAMA_REG_TTL: int = 120  # seconds before done/error entries are expired
+
 
 def _get_s3_op_state(key_tuple: tuple) -> dict:
     """Return current S3 op state for (repo_id, filename), evicting expired done/error entries."""
@@ -438,6 +447,19 @@ def _get_s3_op_state(key_tuple: tuple) -> dict:
             completed_at = state.get("completed_at", 0.0)
             if time.time() - completed_at > _S3_OP_TTL:
                 del _s3_ops[key_tuple]
+                return {}
+        return dict(state)
+
+
+def _get_ollama_reg_state(key_tuple: tuple) -> dict:
+    """Return current Ollama registration state for (repo_id, filename), evicting expired entries."""
+    with _ollama_reg_lock:
+        state = _ollama_reg_ops.get(key_tuple)
+        if state is None:
+            return {}
+        if state.get("status") in ("done", "error"):
+            if time.time() - state.get("completed_at", 0.0) > _OLLAMA_REG_TTL:
+                del _ollama_reg_ops[key_tuple]
                 return {}
         return dict(state)
 
@@ -509,6 +531,61 @@ def _s3_download_worker(config_path: Path, repo_id: str, filename: str) -> None:
         print(f"  [S3-DL-ERR] Download worker exception: {exc}", file=sys.stderr)
         with _s3_op_lock:
             _s3_ops[key_tuple] = {"status": "error", "operation": "download", "error": str(exc), "s3_key": "", "completed_at": time.time()}
+
+
+def _ollama_register_worker(
+    repo_id: str,
+    filename: str,
+    ollama_model: str,
+    local_file: Path,
+) -> None:
+    """
+    Background thread: register a GGUF file with the local Ollama daemon.
+
+    Calls register_with_ollama() which uses the Ollama 0.18+ two-step API:
+      1. SHA256 compute + POST /api/blobs/sha256:{hash}  (blob upload with progress)
+      2. POST /api/create with files: {"model.gguf": "sha256:{hash}"}
+
+    Updates _ollama_reg_ops[(repo_id, filename)] with 'progress' (0-100) so the
+    UI can poll /api/ollama/status and show a live percentage on the button.
+    """
+    key_tuple = (repo_id, filename)
+    with _ollama_reg_lock:
+        _ollama_reg_ops[key_tuple] = {
+            "status": "running",
+            "ollama_model": ollama_model,
+            "error": None,
+            "progress": 0,
+        }
+
+    def _on_progress(completed: int, total: int) -> None:
+        pct = completed * 100 // total if total else 0
+        with _ollama_reg_lock:
+            state = _ollama_reg_ops.get(key_tuple)
+            if state and state.get("status") == "running":
+                state["progress"] = pct
+
+    try:
+        _ollama_hub.register_with_ollama(local_file, ollama_model, progress_callback=_on_progress)
+        print(f"  [OLLAMA-REG-OK] Registered '{ollama_model}' for {repo_id}::{filename}")
+        with _ollama_reg_lock:
+            _ollama_reg_ops[key_tuple] = {
+                "status": "done",
+                "ollama_model": ollama_model,
+                "error": None,
+                "progress": 100,
+                "completed_at": time.time(),
+            }
+    except Exception as exc:
+        print(f"  [OLLAMA-REG-ERR] {exc}", file=sys.stderr)
+        with _ollama_reg_lock:
+            _ollama_reg_ops[key_tuple] = {
+                "status": "error",
+                "ollama_model": ollama_model,
+                "error": str(exc),
+                "progress": 0,
+                "completed_at": time.time(),
+            }
 
 
 def _check_stale_download_state() -> bool:
@@ -2265,7 +2342,7 @@ async function registerWithOllama(m, btn) {
       await loadModels();
     }
 
-    // ── Step 2: register with Ollama ───────────────────────────────────────
+    // ── Step 2: start background registration ─────────────────────────────
     btn.textContent = '→O…';
     const regResp = await fetch('/api/ollama/register', {
       method: 'POST',
@@ -2275,6 +2352,34 @@ async function registerWithOllama(m, btn) {
     const regData = await regResp.json();
     if (!regResp.ok) {
       throw new Error('Ошибка регистрации в Ollama: ' + (regData.error || 'HTTP ' + regResp.status));
+    }
+
+    // ── Step 3: poll /api/ollama/status until done or error ────────────────
+    // Server returns {"status":"started"} or {"status":"running"} immediately;
+    // the actual blob copy runs in a background thread via REST API streaming.
+    // State dict includes "progress" (0-100) updated from NDJSON events.
+    if (regData.status === 'started' || regData.status === 'running') {
+      await new Promise((resolve, reject) => {
+        let polls = 0;
+        const iv = setInterval(async () => {
+          polls++;
+          if (polls > 1800) { clearInterval(iv); reject(new Error('Таймаут регистрации в Ollama (1ч)')); return; }
+          try {
+            const qs = `repo_id=${encodeURIComponent(m.repo_id)}&filename=${encodeURIComponent(m.filename)}`;
+            const sr = await fetch('/api/ollama/status?' + qs);
+            if (!sr.ok) { clearInterval(iv); reject(new Error('Ошибка опроса статуса Ollama')); return; }
+            const sd = await sr.json();
+            // Show live progress if available, otherwise animate dots
+            if (sd.status === 'running' && sd.progress > 0) {
+              btn.textContent = `→O ${sd.progress}%`;
+            } else {
+              btn.textContent = polls % 3 === 0 ? '→O··' : polls % 3 === 1 ? '→O·' : '→O…';
+            }
+            if (sd.status === 'done') { clearInterval(iv); resolve(); }
+            else if (sd.status === 'error') { clearInterval(iv); reject(new Error(sd.error || 'Ошибка регистрации')); }
+          } catch (e) { clearInterval(iv); reject(e); }
+        }, 2000);
+      });
     }
 
     // ── Update ollamaLoaded and re-render ──────────────────────────────────
@@ -4960,6 +5065,20 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
             op = _get_s3_op_state(key_tuple) or {"status": "idle", "operation": None, "error": None, "s3_key": ""}
             self._send_json(op)
 
+        elif path == "/api/ollama/status":
+            # Return current Ollama registration status for a specific model.
+            # Used by UI to poll progress of background `ollama create` operations.
+            # Query params: ?repo_id=...&filename=...
+            qs = parse_qs(parsed.query)
+            repo_id = (qs.get("repo_id", [None])[0] or "").strip()
+            filename = (qs.get("filename", [None])[0] or "").strip()
+            if not repo_id or not filename:
+                self._send_json({"error": "repo_id и filename обязательны"}, status=400)
+                return
+            key_tuple = (repo_id, filename)
+            op = _get_ollama_reg_state(key_tuple) or {"status": "idle", "ollama_model": "", "error": None}
+            self._send_json(op)
+
         else:
             self._send_json({"error": "Not found"}, status=404)
 
@@ -5330,8 +5449,21 @@ class ModelBrowserHandler(BaseHTTPRequestHandler):
                     self._send_json({"error": f"Файл не найден на диске: {local_file}"}, status=404)
                     return
 
-                _ollama_hub.register_with_ollama(local_file, ollama_model)
-                self._send_json({"status": "ok", "ollama_model": ollama_model})
+                # If a registration is already running for this file — report it instead
+                # of starting a duplicate subprocess.
+                key_tuple = (repo_id, filename)
+                existing = _get_ollama_reg_state(key_tuple)
+                if existing.get("status") == "running":
+                    self._send_json({"status": "running", "ollama_model": ollama_model})
+                    return
+
+                t = threading.Thread(
+                    target=_ollama_register_worker,
+                    args=(repo_id, filename, ollama_model, local_file),
+                    daemon=True,
+                )
+                t.start()
+                self._send_json({"status": "started", "ollama_model": ollama_model})
             except (ValueError, TypeError) as e:
                 self._send_json({"error": str(e)}, status=400)
             except Exception as e:

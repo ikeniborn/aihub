@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import html as _html
 import json
+import os
 import re
 import sys
 import time
@@ -814,36 +815,258 @@ def download_model_gguf(
 # ─── Ollama registration ──────────────────────────────────────────────────────
 
 
+def _ollama_stream_ndjson(
+    resp,
+    progress_callback: Optional[Callable[[int, int], None]],
+    stall_timeout: float,
+    label: str,
+) -> None:
+    """
+    Consume an Ollama NDJSON streaming response, call progress_callback on each
+    progress event, and raise RuntimeError on error or stall.
+
+    Expected event format:
+      {"status": "...", "total": N, "completed": M}  — progress
+      {"status": "success"}                           — done
+      {"error": "..."}                                — failure
+    """
+    import time as _time
+
+    last_activity = _time.monotonic()
+    for raw_line in resp.iter_lines():
+        now = _time.monotonic()
+        if now - last_activity > stall_timeout:
+            raise RuntimeError(
+                f"Ollama daemon stalled during {label}: "
+                f"no data for {stall_timeout:.0f}s"
+            )
+        last_activity = now
+
+        if not raw_line:
+            continue
+        try:
+            event = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+
+        if "error" in event:
+            raise RuntimeError(f"Ollama error: {event['error']}")
+
+        status = event.get("status", "")
+        total = int(event.get("total", 0) or 0)
+        completed = int(event.get("completed", 0) or 0)
+
+        if total > 0:
+            pct = completed * 100 // total
+            print(f"  [OLLAMA] {label} — {status}: {completed}/{total} ({pct}%)")
+            if progress_callback is not None:
+                progress_callback(completed, total)
+        else:
+            print(f"  [OLLAMA] {label} — {status}")
+        sys.stdout.flush()
+
+        if status == "success":
+            return
+
+    raise RuntimeError(
+        f"Ollama daemon closed connection without 'success' during {label}"
+    )
+
+
+# ─── Ollama models directory detection ────────────────────────────────────────
+
+
+def _detect_ollama_models_dir() -> Path:
+    """
+    Detect the Ollama daemon's model storage directory.
+
+    Resolution order:
+    1. ``OLLAMA_MODELS`` env var of the running daemon (read from /proc/{pid}/environ).
+    2. ``OLLAMA_MODELS`` env var of the current process.
+    3. Common well-known paths probed for existence.
+    4. Fallback: ``/usr/share/ollama/.ollama/models``.
+    """
+    # 1. Read from daemon process environment
+    try:
+        import subprocess as _sp
+        r = _sp.run(["pgrep", "-u", "ollama", "ollama"],
+                    capture_output=True, text=True)
+        pid = (r.stdout.strip().split("\n") or [""])[0].strip()
+        if pid:
+            raw = Path(f"/proc/{pid}/environ").read_bytes()
+            for entry in raw.split(b"\x00"):
+                if entry.startswith(b"OLLAMA_MODELS="):
+                    return Path(entry[14:].decode())
+    except Exception:
+        pass
+
+    # 2. Current process env
+    env_val = os.environ.get("OLLAMA_MODELS", "")
+    if env_val:
+        return Path(env_val)
+
+    # 3. Common paths
+    for candidate in [
+        Path("/usr/share/ollama/.ollama/models"),
+        Path("/var/lib/ollama/models"),
+        Path.home() / ".ollama/models",
+    ]:
+        if candidate.is_dir():
+            return candidate
+
+    # 4. Fallback
+    return Path("/usr/share/ollama/.ollama/models")
+
+
+def _register_direct(
+    local_file: Path,
+    ollama_name: str,
+    progress_callback: Optional[Callable[[int, int], None]],
+    models_dir: Path,
+) -> None:
+    """
+    Register a GGUF by writing directly into the Ollama blob store and
+    manifests directory — no HTTP, no daemon socket.
+
+    Requires write access to ``models_dir/blobs/`` and
+    ``models_dir/manifests/``.  Typical setup: add the running user to the
+    ``ollama`` group and ``chmod g+w`` both directories.
+
+    Steps:
+    1. SHA256 + copy GGUF to ``blobs/sha256-{hash}`` in a single streaming
+       pass (skipped if blob already exists).
+    2. Write a minimal config blob (JSON) to ``blobs/sha256-{cfg_hash}``.
+    3. Write the OCI manifest JSON to
+       ``manifests/registry.ollama.ai/library/{name}/{tag}``.
+
+    All files are created with mode 0o644 so the ``ollama`` daemon can read
+    them regardless of umask.
+    """
+    import hashlib
+    import os as _os
+    import tempfile
+
+    namespace, model_name, tag = _parse_model_tag(ollama_name)
+    blobs_dir = models_dir / "blobs"
+    mf_dir = models_dir / "manifests" / "registry.ollama.ai" / namespace / model_name
+    mf_dir.mkdir(parents=True, exist_ok=True)
+
+    file_size = local_file.stat().st_size
+    blob_final: Optional[Path] = None
+
+    # ── Step 1: copy GGUF to blob store (single pass SHA256 + copy) ──────
+    # First compute SHA256 to check for existing blob
+    print(f"  [OLLAMA-DIRECT] Computing SHA256 of {local_file.name} ({fmt_size(file_size)})…")
+    sys.stdout.flush()
+    hasher = hashlib.sha256()
+    done = 0
+    with open(local_file, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_CHUNK_SIZE), b""):
+            hasher.update(chunk)
+            done += len(chunk)
+            if progress_callback:
+                progress_callback(done // 2, file_size)
+    digest = hasher.hexdigest()
+    blob_final = blobs_dir / f"sha256-{digest}"
+
+    if blob_final.exists():
+        print(f"  [OLLAMA-DIRECT] Blob already present — skipping copy")
+        if progress_callback:
+            progress_callback(file_size, file_size)
+    else:
+        # Copy to a temp file in the same directory, then atomic rename
+        print(f"  [OLLAMA-DIRECT] Copying blob to {blobs_dir.name}/sha256-{digest[:12]}…")
+        sys.stdout.flush()
+        tmp_fd, tmp_path_str = tempfile.mkstemp(dir=blobs_dir, prefix="_tmp_blob_")
+        tmp_path = Path(tmp_path_str)
+        try:
+            uploaded = 0
+            with _os.fdopen(tmp_fd, "wb") as dst, open(local_file, "rb") as src:
+                for chunk in iter(lambda: src.read(_CHUNK_SIZE), b""):
+                    dst.write(chunk)
+                    uploaded += len(chunk)
+                    if progress_callback:
+                        progress_callback(file_size // 2 + uploaded // 2, file_size)
+            tmp_path.chmod(0o644)
+            tmp_path.rename(blob_final)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+        print(f"  [OLLAMA-DIRECT] Blob written: {fmt_size(file_size)}")
+        sys.stdout.flush()
+
+    # ── Step 2: config blob ───────────────────────────────────────────────
+    config = json.dumps({
+        "model_format": "gguf",
+        "model_family": "",
+        "model_families": [],
+        "model_type": "",
+        "file_type": "",
+        "architecture": "amd64",
+        "os": "linux",
+        "rootfs": {"type": "layers", "diff_ids": [f"sha256:{digest}"]},
+    }, separators=(",", ":")).encode()
+    cfg_digest = hashlib.sha256(config).hexdigest()
+    cfg_blob = blobs_dir / f"sha256-{cfg_digest}"
+    if not cfg_blob.exists():
+        cfg_blob.write_bytes(config)
+        cfg_blob.chmod(0o644)
+
+    # ── Step 3: manifest ──────────────────────────────────────────────────
+    manifest = json.dumps({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.docker.distribution.manifest.v2+json",
+        "config": {
+            "mediaType": "application/vnd.docker.container.image.v1+json",
+            "digest": f"sha256:{cfg_digest}",
+            "size": len(config),
+        },
+        "layers": [{
+            "mediaType": "application/vnd.ollama.image.model",
+            "digest": f"sha256:{digest}",
+            "size": file_size,
+        }],
+    }, separators=(",", ":"))
+    mf_path = mf_dir / tag
+    mf_path.write_text(manifest, encoding="utf-8")
+    mf_path.chmod(0o644)
+
+    if progress_callback:
+        progress_callback(file_size, file_size)
+    print(f"  [OLLAMA-DIRECT] Manifest written: {mf_path}")
+    sys.stdout.flush()
+
+
 def register_with_ollama(
     local_file: Path,
     ollama_name: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    ollama_url: str = "http://localhost:11434",
+    stall_timeout: float = 120.0,
 ) -> None:
     """Register a locally downloaded GGUF with the local Ollama daemon.
 
-    Writes a temporary Modelfile containing ``FROM {local_file}`` and runs
-    ``ollama create {ollama_name} -f <Modelfile>``.
+    Primary path — direct write (fast, no HTTP overhead):
+      Detects the daemon's blob store, copies the GGUF there directly,
+      and writes the OCI manifest.  Requires write access to the blob store
+      (add user to ``ollama`` group + ``chmod g+w blobs/ manifests/``).
 
-    Ollama computes the SHA256 of the file:
-    - If the blob already exists in ``$OLLAMA_MODELS/blobs/`` → links it (no copy).
-    - Otherwise → copies the GGUF into the blobs directory.
-
-    After registration the local aihub copy can be deleted — the model will
-    continue to function via Ollama's own blob store.
-
-    Requirements:
-      - ``ollama`` must be installed and available on PATH.
+    Fallback — HTTP blob upload (slow, ~200 KB/s due to daemon's 8 KB receive
+      window, but works without any special permissions):
+      ``POST /api/blobs/sha256:{hash}`` + ``POST /api/create``.
 
     Args:
-      local_file:   Path to the downloaded GGUF file (must exist).
-      ollama_name:  Ollama model name/tag (e.g. ``'qwen3:7b'``, ``'llama3.2'``).
+      local_file:        Path to the downloaded GGUF file (must exist).
+      ollama_name:       Ollama model name/tag (e.g. ``'qwen3:7b'``, ``'llama3.2'``).
+      progress_callback: Optional ``callback(bytes_done, total_bytes)``.
+      ollama_url:        Base URL of the Ollama daemon (fallback only).
+      stall_timeout:     Seconds without daemon response before raising (fallback only).
 
     Raises:
-      FileNotFoundError:             if *local_file* does not exist.
-      subprocess.CalledProcessError: if ``ollama create`` exits non-zero.
+      FileNotFoundError: if *local_file* does not exist.
+      ValueError:        if *ollama_name* format is invalid.
+      RuntimeError:      on unrecoverable error.
     """
-    import subprocess
-    import tempfile
-
     if not local_file.is_file():
         raise FileNotFoundError(f"GGUF file not found: {local_file}")
     if not _OLLAMA_TAG_RE.match(ollama_name):
@@ -852,19 +1075,119 @@ def register_with_ollama(
             "Expected format: model, model:tag, or namespace/model:tag"
         )
 
-    modelfile_content = f"FROM {local_file.resolve()}\n"
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".Modelfile", delete=False, encoding="utf-8"
-    )
+    # ── Primary: direct write into Ollama blob store (fast) ───────────────
+    models_dir = _detect_ollama_models_dir()
+    blobs_dir = models_dir / "blobs"
     try:
-        tmp.write(modelfile_content)
-        tmp.close()
-        print(f"  [OLLAMA] Running: ollama create {ollama_name}")
-        subprocess.run(
-            ["ollama", "create", ollama_name, "-f", tmp.name],
-            check=True,
+        # Quick write-access probe before starting the heavy copy
+        probe = blobs_dir / "_probe"
+        probe.touch()
+        probe.unlink()
+        _register_direct(local_file, ollama_name, progress_callback, models_dir)
+        print(f"  [OLLAMA] Registered '{ollama_name}' successfully (direct)")
+        sys.stdout.flush()
+        return
+    except PermissionError as exc:
+        print(
+            f"  [OLLAMA] No write access to {blobs_dir} — falling back to HTTP upload.\n"
+            f"           To enable fast direct write: sudo usermod -aG ollama $USER && "
+            f"sudo chmod g+w {blobs_dir} {models_dir / 'manifests'}",
+            file=sys.stderr,
         )
-    finally:
-        Path(tmp.name).unlink(missing_ok=True)
+    except Exception as exc:
+        print(f"  [OLLAMA] Direct write failed ({exc}) — falling back to HTTP upload",
+              file=sys.stderr)
 
-    print(f"  [OLLAMA] Registered '{ollama_name}' successfully")
+    # ── Fallback: HTTP blob upload via Ollama REST API ─────────────────────
+    # Note: Ollama's blob upload handler uses an 8 KB receive window, so
+    # throughput is ~200 KB/s regardless of disk speed.  Use direct write
+    # for production use.
+    import hashlib
+    import time as _time
+
+    base_url = ollama_url.rstrip("/")
+    session = _get_session()
+    file_size = local_file.stat().st_size
+
+    print(f"  [OLLAMA] Computing SHA256 of {local_file.name} ({fmt_size(file_size)})…")
+    sys.stdout.flush()
+    hasher = hashlib.sha256()
+    bytes_read = 0
+    with open(local_file, "rb") as fh:
+        for chunk in iter(lambda: fh.read(_CHUNK_SIZE), b""):
+            hasher.update(chunk)
+            bytes_read += len(chunk)
+            if progress_callback is not None:
+                progress_callback(bytes_read // 2, file_size)
+    digest = hasher.hexdigest()
+    blob_url = f"{base_url}/api/blobs/sha256:{digest}"
+
+    try:
+        head = session.head(blob_url, timeout=10)
+        blob_exists = head.status_code == 200
+    except Exception:
+        blob_exists = False
+
+    if blob_exists:
+        print(f"  [OLLAMA] Blob already present — skipping upload")
+        if progress_callback is not None:
+            progress_callback(file_size, file_size)
+    else:
+        print(f"  [OLLAMA] Uploading blob to daemon (slow HTTP path)…")
+        sys.stdout.flush()
+
+        class _ProgressReader:
+            def __init__(self) -> None:
+                self._fh = open(local_file, "rb")
+                self._uploaded = 0
+
+            def read(self, n: int = _CHUNK_SIZE) -> bytes:
+                data = self._fh.read(n if n > 0 else _CHUNK_SIZE)
+                if data:
+                    self._uploaded += len(data)
+                    if progress_callback is not None:
+                        progress_callback(file_size // 2 + self._uploaded // 2, file_size)
+                return data
+
+            def __len__(self) -> int:
+                return file_size
+
+            def close(self) -> None:
+                self._fh.close()
+
+        reader = _ProgressReader()
+        try:
+            up = session.post(
+                blob_url,
+                data=reader,
+                headers={"Content-Type": "application/octet-stream",
+                         "Content-Length": str(file_size)},
+                timeout=(10, stall_timeout),
+            )
+            if up.status_code not in (200, 201):
+                raise RuntimeError(
+                    f"Blob upload failed: HTTP {up.status_code} — {up.text[:200]}"
+                )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Blob upload error: {exc}") from exc
+        finally:
+            reader.close()
+
+    try:
+        resp = session.post(
+            f"{base_url}/api/create",
+            json={"model": ollama_name,
+                  "files": {"model.gguf": f"sha256:{digest}"},
+                  "stream": True},
+            stream=True,
+            timeout=(10, stall_timeout),
+        )
+        resp.raise_for_status()
+    except Exception as exc:
+        raise RuntimeError(f"Cannot reach Ollama daemon at {ollama_url}: {exc}") from exc
+
+    _ollama_stream_ndjson(resp, None, stall_timeout, label="create")
+    print(f"  [OLLAMA] Registered '{ollama_name}' successfully (HTTP)")
+    sys.stdout.flush()
